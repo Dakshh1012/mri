@@ -1,0 +1,46 @@
+{
+  "job_id": "3beb4bc4-0a67-4ffd-a09f-868882ee3775",
+  "participant_id": "MRB_0135",
+  "status": "success",
+  "chronological_age": 45.0,
+  "sex": "M",
+  "percentile_scores": {
+    "csf": 50
+  },
+  "z_scores": {
+    "csf": 2725.07
+  },
+  "outlier_regions": [
+    "csf"
+  ],
+  "processing_time_seconds": 0.6,
+  "volumetric_features": {
+    "total_brain": 95000000.0,
+    "csf": 50000000.0,
+    "gray_matter": 22000000.0,
+    "white_matter": 23000000.0,
+    "left_hemisphere": 48000000.0,
+    "right_hemisphere": 47000000.0,
+    "frontal_approximation": 5500000.0,
+    "parietal_approximation": 4400000.0,
+    "temporal_approximation": 4800000.0,
+    "occipital_approximation": 3300000.0,
+    "cerebellum_approximation": 3900000.0,
+    "caudate_approximation": 660000.0,
+    "putamen_approximation": 880000.0,
+    "pallidum_approximation": 330000.0,
+    "hippocampus_approximation": 550000.0,
+    "amygdala_approximation": 220000.0,
+    "thalamus_approximation": 990000.0,
+    "lateral_ventricles_approximation": 30000000.0,
+    "third_ventricle_approximation": 5000000.0,
+    "fourth_ventricle_approximation": 2500000.0
+  },
+  "metadata": {
+    "participant_id": "MRB_0135",
+    "age": 45.0,
+    "sex": "M",
+    "file_path": "C:\\Users\\Daksh\\Desktop\\mri\\MRBrain\\temp_processing\\3beb4bc4-0a67-4ffd-a09f-868882ee3775\\MRB_0135.nii.gz",
+    "timestamp": "2025-10-30T01:54:28.104095"
+  }
+}

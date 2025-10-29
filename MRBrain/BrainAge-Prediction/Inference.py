@@ -783,13 +783,14 @@ def run_segmentation_helper(nifti_path: str, job_dir: Path, participant_id: str)
     try:
         print(f"Running segmentation for {participant_id}")
         
-        # Import the volume extractor from parent directory
+        # Import the volume extractor from Segmentation directory
         import sys
-        sys.path.append(str(Path(__file__).parent.parent))
-        from simple_volume_extractor import extract_brain_volumes
+        segmentation_path = str(Path(__file__).parent.parent / "Segmentation")
+        sys.path.insert(0, segmentation_path)
+        from simple_volume_extractor import extract_basic_volumes
         
         # Extract volumes
-        volumes = extract_brain_volumes(nifti_path)
+        volumes = extract_basic_volumes(nifti_path)
         
         # Save volumes to job directory
         volumes_file = job_dir / f"{participant_id}_volumes.json"
@@ -838,10 +839,30 @@ RESULTS_DIR.mkdir(exist_ok=True)
 @brainage_app.post("/brain-age", response_model=BrainAgeResponse)
 async def brain_age_prediction_route(
     nifti_file: UploadFile = File(..., description="NIfTI MRI file (.nii or .nii.gz)"),
-    age: float = Form(..., description="Chronological age in years"),
-    gender: str = Form(..., description="Gender (M/F)")
+    age: Optional[float] = Form(None, description="Chronological age in years"),
+    gender: Optional[str] = Form(None, description="Gender (M/F)"),
+    metadata_json: Optional[UploadFile] = File(None, description="JSON file with age and gender metadata")
 ):
-    """Brain Age Prediction Route"""
+    """Brain Age Prediction Route - supports individual fields or JSON metadata"""
+    
+    # Extract age and gender from JSON if provided
+    if metadata_json:
+        import json
+        try:
+            json_content = await metadata_json.read()
+            metadata = json.loads(json_content.decode('utf-8'))
+            age = float(metadata.get('age'))
+            gender = str(metadata.get('gender'))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON metadata: {str(e)}")
+    
+    # Validation
+    if not age or not gender:
+        raise HTTPException(status_code=400, detail="Age and gender must be provided either as form fields or in JSON metadata")
+    
+    if gender not in ['M', 'F']:
+        raise HTTPException(status_code=400, detail="Gender must be 'M' or 'F'")
+    
     return await brain_age_prediction_inference(
         nifti_file, age, gender, 
         run_metadata_generation_helper, run_segmentation_helper, 

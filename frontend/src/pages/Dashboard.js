@@ -304,7 +304,7 @@ const Dashboard = () => {
                     value={age}
                     onChange={(e) => setAge(e.target.value)}
                     min="10"
-                    max="40"
+                    max="100"
                     required
                   />
                 </div>
@@ -497,7 +497,7 @@ const Dashboard = () => {
                         value={customAge}
                         onChange={(e) => setCustomAge(e.target.value)}
                         min="10"
-                        max="40"
+                        max="100"
                       />
                       <input
                         type="number"

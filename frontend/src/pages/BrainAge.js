@@ -5,6 +5,8 @@ const BrainAge = () => {
   const [file, setFile] = useState(null);
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('');
+  const [jsonFile, setJsonFile] = useState(null);
+  const [uploadMode, setUploadMode] = useState('individual'); // 'individual' or 'json'
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -52,6 +54,39 @@ const BrainAge = () => {
       } else {
         setError('Please select a valid NIfTI file (.nii or .nii.gz)');
         setFile(null);
+      }
+    }
+  };
+
+  const handleJsonFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      const fileName = selectedFile.name.toLowerCase();
+      if (fileName.endsWith('.json')) {
+        setJsonFile(selectedFile);
+        setError(null);
+        
+        // Read and validate JSON file
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const jsonData = JSON.parse(event.target.result);
+            if (jsonData.age && jsonData.gender) {
+              setAge(jsonData.age.toString());
+              setGender(jsonData.gender);
+            } else {
+              setError('JSON file must contain "age" and "gender" fields');
+              setJsonFile(null);
+            }
+          } catch (err) {
+            setError('Invalid JSON file format');
+            setJsonFile(null);
+          }
+        };
+        reader.readAsText(selectedFile);
+      } else {
+        setError('Please select a valid JSON file (.json)');
+        setJsonFile(null);
       }
     }
   };
@@ -105,6 +140,43 @@ const BrainAge = () => {
             <option value="M">Male</option>
             <option value="F">Female</option>
           </select>
+        </div>
+
+        {/* JSON Upload Button */}
+        <div className="form-group">
+          <label htmlFor="jsonFile">Or load from JSON file:</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <input
+              type="file"
+              id="jsonFile"
+              accept=".json"
+              onChange={handleJsonFileChange}
+              style={{ display: 'none' }}
+            />
+            <button
+              type="button"
+              onClick={() => document.getElementById('jsonFile').click()}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#2196f3',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              � Load JSON Metadata
+            </button>
+            {jsonFile && (
+              <small style={{ color: '#28a745' }}>
+                ✓ Loaded: {jsonFile.name}
+              </small>
+            )}
+          </div>
+          <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+            JSON will auto-fill age and gender fields above
+          </small>
         </div>
 
         <button type="submit" className="btn" disabled={loading}>

@@ -1,0 +1,54 @@
+{
+  "job_id": "2c22c626-e77e-43eb-a375-d729867b90c8",
+  "participant_id": "MRB_0152",
+  "status": "success",
+  "chronological_age": 45.0,
+  "sex": "M",
+  "percentile_scores": {
+    "total_brain": 95,
+    "csf": 80.0,
+    "gray_matter": 52.0,
+    "white_matter": 53.0,
+    "left_hemisphere": 78.0
+  },
+  "z_scores": {
+    "total_brain": 2.25,
+    "csf": 1.5,
+    "gray_matter": 0.1,
+    "white_matter": 0.15,
+    "left_hemisphere": 1.4
+  },
+  "outlier_regions": [
+    "total_brain"
+  ],
+  "processing_time_seconds": 0.05,
+  "volumetric_features": {
+    "total_brain": 95000000.0,
+    "csf": 50000000.0,
+    "gray_matter": 22000000.0,
+    "white_matter": 23000000.0,
+    "left_hemisphere": 48000000.0,
+    "right_hemisphere": 47000000.0,
+    "frontal_approximation": 5500000.0,
+    "parietal_approximation": 4400000.0,
+    "temporal_approximation": 4800000.0,
+    "occipital_approximation": 3300000.0,
+    "cerebellum_approximation": 3900000.0,
+    "caudate_approximation": 660000.0,
+    "putamen_approximation": 880000.0,
+    "pallidum_approximation": 330000.0,
+    "hippocampus_approximation": 550000.0,
+    "amygdala_approximation": 220000.0,
+    "thalamus_approximation": 990000.0,
+    "lateral_ventricles_approximation": 30000000.0,
+    "third_ventricle_approximation": 5000000.0,
+    "fourth_ventricle_approximation": 2500000.0
+  },
+  "metadata": {
+    "participant_id": "MRB_0152",
+    "age": 45.0,
+    "sex": "M",
+    "file_path": "C:\\Users\\Daksh\\Desktop\\mri\\MRBrain\\temp_processing\\2c22c626-e77e-43eb-a375-d729867b90c8\\MRB_0152.nii.gz",
+    "timestamp": "2025-10-30T01:51:41.604248"
+  }
+}
