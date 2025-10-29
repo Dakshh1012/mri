@@ -1,0 +1,2 @@
+participant_id,total_brain,csf,gray_matter,white_matter,left_hemisphere,right_hemisphere,frontal_approximation,parietal_approximation,temporal_approximation,occipital_approximation,cerebellum_approximation,caudate_approximation,putamen_approximation,pallidum_approximation,hippocampus_approximation,amygdala_approximation,thalamus_approximation,lateral_ventricles_approximation,third_ventricle_approximation,fourth_ventricle_approximation
+MRB_0152,52.4,47.7,79.3,68.6,43.1,49.2,28.0,84.6,17.3,61.4,73.7,73.3,13.8,90.9,47.6,73.0,88.1,25.5,24.0,72.9

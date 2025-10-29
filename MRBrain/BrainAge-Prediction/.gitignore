@@ -1,0 +1,7 @@
+Pipeline_results/
+Trial_results/
+Data/
+__pycache__/
+*.pyc 
+__pycache__/*
+*.csv
