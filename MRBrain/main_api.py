@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Directory paths
 BASE_DIR = Path(__file__).parent
-BRAINAGE_DIR = BASE_DIR / "BrainAge-Prediction"
-NORMATIVE_DIR = BASE_DIR / "Normative Modeling"
 
 # Create main FastAPI app
 app = FastAPI(
@@ -40,16 +38,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Function to safely import and include routes
+# Function to safely import and include routes from common inference
 def include_brainage_routes():
-    """Import and include BrainAge routes"""
+    """Import and include BrainAge routes from common inference"""
     try:
-        # Add BrainAge-Prediction to path
-        sys.path.insert(0, str(BRAINAGE_DIR))
-        
-        # Import the FastAPI app from Inference.py
-        from Inference import brainage_app
-        logger.info("Successfully imported BrainAge routes")
+        # Import the FastAPI app from common_inference.py
+        from common_inference import brainage_app
+        logger.info("Successfully imported BrainAge routes from common inference")
         
         # Include all routes from brainage_app
         for route in brainage_app.routes:
@@ -57,18 +52,15 @@ def include_brainage_routes():
         
         return True
     except Exception as e:
-        logger.error(f"Failed to import BrainAge routes: {e}")
+        logger.error(f"Failed to import BrainAge routes from common inference: {e}")
         return False
 
 def include_normative_routes():
-    """Import and include Normative routes"""
+    """Import and include Normative routes from common inference"""
     try:
-        # Add Normative Modeling to path
-        sys.path.insert(0, str(NORMATIVE_DIR))
-        
-        # Import the FastAPI app from inference.py
-        from inference import normative_app
-        logger.info("Successfully imported Normative routes")
+        # Import the FastAPI app from common_inference.py
+        from common_inference import normative_app
+        logger.info("Successfully imported Normative routes from common inference")
         
         # Include all routes from normative_app
         for route in normative_app.routes:
@@ -76,7 +68,7 @@ def include_normative_routes():
             
         return True
     except Exception as e:
-        logger.error(f"Failed to import Normative routes: {e}")
+        logger.error(f"Failed to import Normative routes from common inference: {e}")
         return False
 
 # Include routes from inference files
