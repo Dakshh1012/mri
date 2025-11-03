@@ -89,70 +89,39 @@ const Dashboard = () => {
   };
 
   const generateNormativeData = (region) => {
-    if (!results?.normative || !region) return [];
+    if (!results?.normative?.percentile_curves?.[region]) {
+      console.log("No percentile data found for region:", region);
+      return [];
+    }
     
-    // Set realistic base volumes for different brain regions
-    const getRealisticBaseVolume = (region) => {
-      const volumeMap = {
-        'total_brain': 1200000,
-        'gray_matter': 700000,
-        'white_matter': 500000,
-        'csf': 150000,
-        'left_hemisphere': 600000,
-        'right_hemisphere': 600000,
-        'frontal_approximation': 175000,
-        'parietal_approximation': 140000,
-        'temporal_approximation': 154000,
-        'occipital_approximation': 105000,
-        'cerebellum_approximation': 126000,
-        'caudate_approximation': 3500,
-        'putamen_approximation': 4500,
-        'pallidum_approximation': 1800,
-        'hippocampus_approximation': 4000,
-        'amygdala_approximation': 1200,
-        'thalamus_approximation': 7000,
-        'lateral_ventricles_approximation': 20000,
-        'third_ventricle_approximation': 1500,
-        'fourth_ventricle_approximation': 1000
-      };
-      return volumeMap[region] || 50000;
-    };
-    
-    const baseVolume = results.normative.volumetric_features[region] || getRealisticBaseVolume(region);
-    const ageRange = Array.from({ length: 31 }, (_, i) => i + 10); // Ages 10-40
-    
-    return ageRange.map(agePoint => {
+    const regionData = results.normative.percentile_curves[region];
+    const ages = regionData.ages || [];
+    const curves = regionData.percentile_curves || {};
+
+    // This will transform the API data into the format Recharts expects
+    return ages.map((agePoint, index) => {
       const dataPoint = { age: agePoint };
-      
       selectedPercentiles.forEach(percentile => {
-        // Simulate age-related volume changes with some variance
-        const ageFactor = 1 - (agePoint - 10) * 0.005; // Gradual decline with age
-        const percentileFactor = percentile / 50; // Scale relative to median
-        const randomVariation = 0.8 + (Math.random() * 0.4); // ±20% variation
-        
-        dataPoint[`p${percentile}`] = Math.max(
-          baseVolume * ageFactor * percentileFactor * randomVariation,
-          1000 // Minimum volume
-        );
+        const percentileKey = percentile.toString();
+        if (curves[percentileKey]) {
+          dataPoint[`p${percentile}`] = curves[percentileKey][index];
+        }
       });
-      
       return dataPoint;
     });
   };
 
   const getPercentilePosition = () => {
-    if (!results?.normative?.volumetric_features?.total_brain) return null;
+    if (!results?.normative?.percentile_scores?.[selectedRegion]) return null;
     
-    const volume = results.normative.volumetric_features.total_brain / 1000; // Convert to cm³
-    const patientAge = parseInt(age);
+    const percentile = results.normative.percentile_scores[selectedRegion];
     
-    // Simple percentile calculation based on volume
-    if (volume > 1100) return { percentile: 90, color: '#4CAF50' };
-    if (volume > 1050) return { percentile: 75, color: '#8BC34A' };
-    if (volume > 1000) return { percentile: 60, color: '#FFC107' };
-    if (volume > 950) return { percentile: 40, color: '#FF9800' };
-    if (volume > 900) return { percentile: 25, color: '#FF5722' };
-    return { percentile: 10, color: '#F44336' };
+    // Dynamically determine color based on percentile value
+    if (percentile >= 90) return { percentile, color: '#4CAF50' }; // Green
+    if (percentile >= 75) return { percentile, color: '#8BC34A' }; // Light Green
+    if (percentile >= 40) return { percentile, color: '#FFC107' }; // Amber
+    if (percentile >= 25) return { percentile, color: '#FF9800' }; // Orange
+    return { percentile, color: '#F44336' }; // Red
   };
 
   const getBrainAgeGap = () => {
@@ -236,7 +205,7 @@ const Dashboard = () => {
           </p>
           {payload.map((entry) => (
             <p key={entry.dataKey} style={{ margin: '2px 0', fontSize: '12px', color: entry.color }}>
-              <strong>{entry.name}:</strong> {(entry.value / 1000).toFixed(1)} cm³
+              <strong>{entry.name}:</strong> {(entry.value).toLocaleString()} mm³
             </p>
           ))}
         </div>
@@ -264,7 +233,7 @@ const Dashboard = () => {
             Age: {data.age} years
           </p>
           <p style={{ margin: '0', fontSize: '12px' }}>
-            Volume: {(data.volume / 1000).toFixed(1)} cm³
+            Volume: {(data.volume).toLocaleString()} mm³
           </p>
         </div>
       );
@@ -519,12 +488,14 @@ const Dashboard = () => {
                     <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                     <XAxis 
                       dataKey="age" 
+                      type="number" // Ensure X-axis is treated as a number
                       label={{ value: 'Age (years)', position: 'insideBottom', offset: -10 }}
-                      domain={['dataMin', 'dataMax']}
+                      domain={[0, 105]} // Set domain from 0 to 105
+                      ticks={[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]} // Explicitly set ticks
                     />
                     <YAxis 
-                      label={{ value: 'Volume (cm³)', angle: -90, position: 'insideLeft', offset: -40 }}
-                      tickFormatter={(value) => `${(value / 1000).toFixed(0)}`}
+                      label={{ value: 'Volume (mm³)', angle: -90, position: 'insideLeft', offset: -40 }}
+                      tickFormatter={(value) => `${value.toLocaleString()}`} // Format with comma separators
                     />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend wrapperStyle={{ paddingTop: '20px' }} />
@@ -607,7 +578,7 @@ const Dashboard = () => {
                   {results.normative.volumetric_features?.total_brain && (
                     <p>
                       Total brain volume: <strong>
-                        {(results.normative.volumetric_features.total_brain / 1000).toFixed(1)} cm³
+                        {(results.normative.volumetric_features.total_brain).toLocaleString()} mm³
                       </strong>
                     </p>
                   )}
