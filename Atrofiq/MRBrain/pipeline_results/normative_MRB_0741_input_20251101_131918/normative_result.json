@@ -1,0 +1,40 @@
+{
+  "job_id": "3175d8fa-d58f-4149-ad5a-a81aaf0a828b",
+  "participant_id": "MRB_0741_input",
+  "status": "error_fallback",
+  "chronological_age": 61.0,
+  "sex": "M",
+  "percentile_scores": {},
+  "z_scores": {},
+  "outlier_regions": [],
+  "processing_time_seconds": 0.0,
+  "volumetric_features": {
+    "total_brain": 12085673.0,
+    "csf": 7784216.0,
+    "gray_matter": 903309.0,
+    "white_matter": 3398148.0,
+    "left_hemisphere": 6058019.0,
+    "right_hemisphere": 6027654.0,
+    "frontal_approximation": 225827.25,
+    "parietal_approximation": 180661.80000000002,
+    "temporal_approximation": 198727.98,
+    "occipital_approximation": 135496.35,
+    "cerebellum_approximation": 162595.62,
+    "caudate_approximation": 27099.27,
+    "putamen_approximation": 36132.36,
+    "pallidum_approximation": 13549.635,
+    "hippocampus_approximation": 22582.725000000002,
+    "amygdala_approximation": 9033.09,
+    "thalamus_approximation": 40648.905,
+    "lateral_ventricles_approximation": 4670529.6,
+    "third_ventricle_approximation": 778421.6000000001,
+    "fourth_ventricle_approximation": 389210.80000000005
+  },
+  "metadata": {
+    "participant_id": "MRB_0741_input",
+    "age": 61.0,
+    "sex": "M",
+    "file_path": "/home/sadaf/Applications/AtrofiQ/MRBrain/temp_processing/3175d8fa-d58f-4149-ad5a-a81aaf0a828b/MRB_0741_input.nii",
+    "timestamp": "2025-11-01T13:19:13.024589"
+  }
+}

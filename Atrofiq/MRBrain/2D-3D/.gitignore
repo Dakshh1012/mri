@@ -1,0 +1,8 @@
+*.nii.gz
+__pycache__/
+*.pyc 
+__pycache__/*
+evaluation_batch_*/
+evaluation_batch*/
+evaluation_batch/**/
+evaluation_batch_20250904_134126/** 

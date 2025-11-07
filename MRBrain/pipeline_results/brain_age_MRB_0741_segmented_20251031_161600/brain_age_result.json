@@ -1,0 +1,38 @@
+{
+  "job_id": "514b8ace-46df-4fc5-b697-b2e92e923991",
+  "participant_id": "MRB_0741_segmented",
+  "status": "fallback",
+  "chronological_age": 70.0,
+  "predicted_brain_age": 72.7,
+  "brain_age_gap": 2.7,
+  "processing_time_seconds": 0.0,
+  "volumetric_features": {
+    "total_brain": 1515126.0,
+    "csf": 1035770.0,
+    "gray_matter": 0.0,
+    "white_matter": 479356.0,
+    "left_hemisphere": 742875.0,
+    "right_hemisphere": 772251.0,
+    "frontal_approximation": 0.0,
+    "parietal_approximation": 0.0,
+    "temporal_approximation": 0.0,
+    "occipital_approximation": 0.0,
+    "cerebellum_approximation": 0.0,
+    "caudate_approximation": 0.0,
+    "putamen_approximation": 0.0,
+    "pallidum_approximation": 0.0,
+    "hippocampus_approximation": 0.0,
+    "amygdala_approximation": 0.0,
+    "thalamus_approximation": 0.0,
+    "lateral_ventricles_approximation": 621462.0,
+    "third_ventricle_approximation": 103577.0,
+    "fourth_ventricle_approximation": 51788.5
+  },
+  "metadata": {
+    "participant_id": "MRB_0741_segmented",
+    "age": 70.0,
+    "sex": "M",
+    "file_path": "/home/sadaf/Applications/AtrofiQ/MRBrain/temp_processing/514b8ace-46df-4fc5-b697-b2e92e923991/MRB_0741_segmented.nii",
+    "timestamp": "2025-10-31T16:15:58.882202"
+  }
+}

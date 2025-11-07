@@ -1,0 +1,12 @@
+.navbar { background: var(--bg-tertiary, #1a1a1a); border-bottom: 1px solid var(--border-subtle, #262626); }
+.navbar-inner { max-width: 1600px; margin: 0 auto; padding: 0 16px; height: 56px; display: flex; align-items: center; justify-content: space-between; }
+.navbar-brand { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; user-select: none; }
+.navbar-logo { height: 100px; width: auto; display: block; }
+.navbar-title { color: var(--text-navbar, #F9629F); font-weight: 600; font-size: 25px; letter-spacing: 0.2px; }
+.logout-btn { background: #ef4444; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+.logout-btn:hover { filter: brightness(0.95); }
+
+@media (min-width: 768px) {
+  .navbar-logo { height: 100px; }
+  .navbar-title { font-size: 25px; }
+}
