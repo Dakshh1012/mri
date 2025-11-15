@@ -1,0 +1,195 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: atrofiq_postgres
+    environment:
+      POSTGRES_DB: brain_mri_db
+      POSTGRES_USER: brainuser
+      POSTGRES_PASSWORD: securepassword123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+  # Redis - Message Broker for Celery
+  redis:
+    image: redis:7-alpine
+    container_name: atrofiq_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+  # MinIO - Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: atrofiq_minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+  # Keycloak
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: atrofiq_keycloak
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/brain_mri_db
+      KC_DB_USERNAME: brainuser
+      KC_DB_PASSWORD: securepassword123
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8080
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_LOG_LEVEL: info
+      KC_METRICS_ENABLED: true
+      KC_HEALTH_ENABLED: true
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin123
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - atrofiq_network
+    command: start-dev
+    restart: unless-stopped
+
+  # AtrofIQ Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: atrofiq_backend
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=brain_mri_db
+      - DB_USER=brainuser
+      - DB_PASSWORD=securepassword123
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SECURE=false
+      - MINIO_BUCKET=atrofiq
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "7000:7000"
+    volumes:
+      - ./backend:/app
+      - ./MRBrain:/app/MRBrain
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: atrofiq_celery_worker
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=brain_mri_db
+      - DB_USER=brainuser
+      - DB_PASSWORD=securepassword123
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SECURE=false
+      - MINIO_BUCKET=atrofiq
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+      - ./MRBrain:/app/MRBrain
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - atrofiq_network
+    command: celery -A app.celery_app worker --loglevel=info
+    restart: unless-stopped
+
+  # Celery Flower - Task Monitoring
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: atrofiq_flower
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    networks:
+      - atrofiq_network
+    command: celery -A app.celery_app flower --host=0.0.0.0 --port=5555
+    restart: unless-stopped
+
+  # MRBrain Inference API
+  mrbrain-api:
+    build:
+      context: ./MRBrain
+      dockerfile: Dockerfile
+    container_name: atrofiq_mrbrain
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./MRBrain:/app
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+  # Frontend (React)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: atrofiq_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:7000
+      - REACT_APP_KEYCLOAK_URL=http://localhost:8080
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  atrofiq_network:
+    driver: bridge

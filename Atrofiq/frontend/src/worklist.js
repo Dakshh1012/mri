@@ -227,118 +227,111 @@ export default function Worklist() {
 
   // Actions
   const handleAnnotateClick = async (entry) => {
-  const status = entry._raw?.status;
-  const processingBy = entry._raw?.processing_by;
-  
-  // If already completed or being processed by someone else, just view
-  if (status === 'Completed' || (processingBy && processingBy !== username)) {
-    navigate(`/dashboard`);
-    return;
-  }
-  
-  try {
-    setError('');
-    setAnnotatingId(entry.id);
+    const status = entry._raw?.status;
+    const processingBy = entry._raw?.processing_by;
     
-    // Fetch presigned NIfTI URL for this study from backend
-    console.log(`Fetching NIfTI URL for folder: ${entry.id}`);
-    const presign = await axios.get(`${API_BASE_URL}/folders/${encodeURIComponent(entry.id)}/nifti-url`);
-    console.log('Presign response:', presign.data);
-    
-    const niftiUrl = presign?.data?.nifti_url || presign?.data?.url || presign?.data?.presigned_url;
-    if (!niftiUrl) {
-      throw new Error('No NIfTI URL returned for this study');
-    }
-    
-    // Extract metadata from the presign response
-    const meta = presign?.data?.meta || {};
-    
-    // Get age - try multiple sources
-    let age = meta.age || entry?._raw?.age || entry?.Age;
-    if (age && typeof age === 'string') {
-      age = parseFloat(age);
-    }
-    
-    // Get gender - try multiple sources and normalize
-    let gender = meta.gender || entry?._raw?.gender || entry?.Gender;
-    if (gender) {
-      const g = gender.toString().trim().toLowerCase();
-      if (g === 'male' || g === 'm') {
-        gender = 'M';
-      } else if (g === 'female' || g === 'f') {
-        gender = 'F';
+    // If already completed, show results immediately
+    if (status === 'Completed') {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/study/${encodeURIComponent(entry.id)}/results`);
+        const results = response.data;
+        
+        if (results.status === 'completed') {
+          navigate('/dashboard', { 
+            state: { 
+              analysisResults: {
+                brainAge: results.brainage_results,
+                normative: results.normative_results
+              },
+              patientAge: results.metadata.age,
+              patientGender: results.metadata.gender
+            }
+          });
+        } else {
+          setError(`Study status: ${results.status}. ${results.message || ''}`);
+        }
+      } catch (err) {
+        console.error('Failed to fetch study results:', err);
+        setError('Failed to load study results');
       }
+      return;
     }
     
-    // Debug: Log what we found
-    console.log('Debug metadata extraction:', {
-      'meta.age': meta.age,
-      'entry._raw.age': entry?._raw?.age,
-      'entry.Age': entry?.Age,
-      'final age': age,
-      'meta.gender': meta.gender,
-      'entry._raw.gender': entry?._raw?.gender,
-      'entry.Gender': entry?.Gender,
-      'final gender': gender,
-      'entry._raw': entry?._raw
-    });
+    // If currently processing, show status
+    if (status === 'Processing') {
+      if (entry._raw?.current_task_id) {
+        try {
+          const statusResponse = await axios.get(`${API_BASE_URL}/task-status/${entry._raw.current_task_id}`);
+          const taskStatus = statusResponse.data;
+          
+          if (taskStatus.status === 'SUCCESS') {
+            // Task completed, refresh and show results
+            fetchFolders();
+            setError('Processing completed! Refreshing...');
+            setTimeout(() => handleAnnotateClick(entry), 1000);
+          } else if (taskStatus.status === 'FAILURE') {
+            setError(`Processing failed: ${taskStatus.error_info || 'Unknown error'}`);
+          } else {
+            setError(`Processing in progress: ${taskStatus.progress}% complete (${taskStatus.status})`);
+          }
+        } catch (err) {
+          setError('Failed to check processing status');
+        }
+      } else {
+        setError('Study is being processed');
+      }
+      return;
+    }
     
-    // Validate we have required metadata
+    // If being processed by someone else, show status
+    if (processingBy && processingBy !== username) {
+      setError(`Study is currently being processed by ${processingBy}`);
+      return;
+    }
+    
+    // If Available but no metadata, show error
+    const meta = entry._raw || {};
+    let age = meta.age || entry?.Age;
+    let gender = meta.gender || entry?.Gender;
+    
     if (!age || !gender) {
-      throw new Error(`Missing required metadata: age=${age}, gender=${gender}. Please ensure age and gender are provided when uploading the study.`);
+      setError(`Cannot process: Missing required metadata (age=${age}, gender=${gender}). Please re-upload with complete metadata.`);
+      return;
     }
     
-    // Build payload for inference
-    const payload = {
-      nifti_url: niftiUrl,
-      age: age,
-      gender: gender
-    };
-    
-    if (username) {
-      payload.username = username;
+    // If Available with metadata, start processing manually (fallback)
+    try {
+      setError('');
+      setAnnotatingId(entry.id);
+      
+      const payload = {
+        username: username || 'unknown',
+        age: age.toString(),
+        gender: gender
+      };
+      
+      console.log('Starting processing with payload:', payload);
+      
+      const response = await axios.post(`${API_BASE_URL}/process/${encodeURIComponent(entry.id)}`, payload, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      console.log('Processing started:', response.data);
+      setError(`Processing started! Task ID: ${response.data.task_id}. Refresh to check status.`);
+      
+      // Refresh the folder list to show updated status
+      setTimeout(() => {
+        fetchFolders();
+      }, 1000);
+      
+    } catch (err) {
+      console.error('Failed to start processing:', err);
+      const msg = err?.response?.data?.detail || err?.response?.data?.message || err?.message || 'Failed to start processing';
+      setError(msg);
+    } finally {
+      setAnnotatingId(null);
     }
-    
-    console.log('Sending inference payload:', payload);
-    
-    // Run both inference endpoints in parallel
-    const [brainAgeResponse, normativeResponse] = await Promise.all([
-      axios.post(`${INFERENCE_API_URL}/brain-age`, payload, {
-        headers: { 'Content-Type': 'application/json' }
-      }),
-      axios.post(`${INFERENCE_API_URL}/normative`, payload, {
-        headers: { 'Content-Type': 'application/json' }
-      }),
-    ]);
-    
-    console.log('Brain Age Response:', brainAgeResponse.data);
-    console.log('Normative Response:', normativeResponse.data);
-    
-    // Combine results and navigate to dashboard with data
-    const analysisResults = {
-      brainAge: brainAgeResponse.data,
-      normative: normativeResponse.data
-    };
-    
-    // Navigate to dashboard with results as state
-    navigate('/dashboard', { 
-      state: { 
-        analysisResults,
-        patientAge: age,
-        patientGender: gender
-      }
-    });
-    
-  } catch (err) {
-    console.error('Inference failed:', err);
-    console.error('Error response:', err?.response?.data);
-    
-    const msg = err?.response?.data?.detail || err?.response?.data?.message || err?.message || 'Failed to run analysis';
-    setError(msg);
-  } finally {
-    setAnnotatingId(null);
-  }
-};
+  };
 
   // Print actions removed
   const deleteStudy = (entry) => {

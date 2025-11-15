@@ -11,8 +11,9 @@ from sqlalchemy import (
     Text,
     create_engine,
     func,
+    ForeignKey,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -59,8 +60,46 @@ class Study(Base):
     nifti_object = Column(Text, nullable=True)  # primary nifti object key if selected
     object_keys = Column(JSON, nullable=True)   # list of uploaded object keys (folder/filename)
 
+    # Task tracking
+    current_task_id = Column(String(255), nullable=True, index=True)  # Current Celery task ID
+    
+    # Analysis results
+    normative_results = Column(JSON, nullable=True)  # Store normative modeling results
+    brainage_results = Column(JSON, nullable=True)   # Store brain age prediction results
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_updated = Column(DateTime(timezone=True), onupdate=func.now(), default=func.now(), nullable=False)
+    
+    # Relationship to tasks
+    tasks = relationship("ProcessingTask", back_populates="study", cascade="all, delete-orphan")
+
+
+class ProcessingTask(Base):
+    __tablename__ = "processing_tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String(255), unique=True, nullable=False, index=True)  # Celery task ID
+    task_name = Column(String(128), nullable=False)  # e.g., "mri_inference", "normative_modeling"
+    
+    # Foreign key to study
+    study_id = Column(Integer, ForeignKey("studies.id"), nullable=False, index=True)
+    
+    # Task metadata
+    status = Column(String(32), nullable=False, default="PENDING")  # PENDING, STARTED, SUCCESS, FAILURE, RETRY
+    progress = Column(Integer, default=0)  # Progress percentage (0-100)
+    
+    # Task parameters and results
+    input_params = Column(JSON, nullable=True)  # Input parameters for the task
+    result = Column(JSON, nullable=True)        # Task result data
+    error_info = Column(Text, nullable=True)    # Error information if failed
+    
+    # Timing
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    
+    # Relationship back to study
+    study = relationship("Study", back_populates="tasks")
 
 
 def init_db() -> None:
@@ -80,5 +119,9 @@ def to_worklist_dict(s: Study) -> Dict[str, Any]:
         "bucket": s.bucket,
         "nifti_object": s.nifti_object,
         "object_keys": s.object_keys or [],
+        "current_task_id": s.current_task_id,
+        "normative_results": s.normative_results,
+        "brainage_results": s.brainage_results,
+        "task_count": len(s.tasks) if s.tasks else 0,
     }
 

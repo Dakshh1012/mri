@@ -6,3 +6,8 @@ pydantic==2.9.2
 python-dotenv==1.0.1
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.10
+celery==5.3.4
+redis==4.6.0
+kombu==5.3.2
+flower==2.0.1
+requests==2.31.0

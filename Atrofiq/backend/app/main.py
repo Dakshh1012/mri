@@ -14,11 +14,18 @@ import logging
 import subprocess
 from contextlib import contextmanager
 
+# Celery imports
+from .celery_app import celery_app
+from .tasks.mri_processing import run_mri_inference
+
 # Local DB utilities
 try:
     from . import db as dbmod  # type: ignore
 except Exception:
     dbmod = None
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 @contextmanager
 def db_session():
@@ -143,6 +150,20 @@ class StartProcessingRequest(BaseModel):
     username: str
 
 
+class ProcessRequest(BaseModel):
+    username: str
+    age: str 
+    gender: str
+
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    progress: int
+    result: Optional[dict] = None
+    error_info: Optional[str] = None
+
+
 @app.post("/upload")
 async def upload_files(
     files: List[UploadFile] = File(...),
@@ -217,10 +238,52 @@ async def upload_files(
                         object_keys=object_keys,
                     )
                     s.add(record)
+                    s.commit()
     except Exception as e:
         logging.getLogger("atrofiq").warning("DB insert failed for folder %s: %s", folder, e)
 
-    return {"ok": True, "folder": folder, "files_count": count}
+    # Auto-start processing if age and gender are provided
+    task_id = None
+    if age and gender:
+        try:
+            task = run_mri_inference.delay(
+                study_folder=folder,
+                age=age,
+                gender=gender,
+                username=username or "system"
+            )
+            task_id = task.id
+            
+            # Update study with task ID and processing status
+            if dbmod:
+                with db_session() as s:
+                    if s is not None:
+                        study = s.query(dbmod.Study).filter_by(folder=folder).first()
+                        if study:
+                            study.current_task_id = task.id
+                            study.status = "Processing"
+                            study.processing_by = username or "system"
+                            
+                            # Create task record
+                            task_record = dbmod.ProcessingTask(
+                                task_id=task.id,
+                                task_name="mri_inference",
+                                study_id=study.id,
+                                input_params={
+                                    "age": age,
+                                    "gender": gender,
+                                    "username": username or "system"
+                                }
+                            )
+                            s.add(task_record)
+                            s.commit()
+            
+            logger.info(f"Auto-started processing for {folder} with task {task.id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-start processing for {folder}: {e}")
+
+    return {"ok": True, "folder": folder, "files_count": count, "task_id": task_id, "auto_processing_started": task_id is not None}
 
 
 @app.get("/folders/")
@@ -326,6 +389,135 @@ def start_processing(folder: str, payload: StartProcessingRequest):
         except Exception as e:
             logging.getLogger("atrofiq").warning("DB update failed for %s: %s", folder, e)
     return {"ok": True}
+
+
+@app.post("/process/{folder}")
+def start_processing_async(folder: str, payload: ProcessRequest):
+    """Start asynchronous MRI processing using Celery."""
+    import uuid
+    try:
+        # Validate study exists
+        if dbmod:
+            with db_session() as s:
+                if s is not None:
+                    study = s.query(dbmod.Study).filter_by(folder=folder).first()
+                    if not study:
+                        raise HTTPException(status_code=404, detail=f"Study not found: {folder}")
+                    
+                    if study.current_task_id:
+                        raise HTTPException(status_code=409, detail="Study is already being processed")
+        
+        # Start Celery task first to get actual task ID
+        task = run_mri_inference.delay(
+            study_folder=folder,
+            age=payload.age,
+            gender=payload.gender,
+            username=payload.username
+        )
+        
+        # Create task record with actual task ID
+        if dbmod:
+            with db_session() as s:
+                if s is not None:
+                    study = s.query(dbmod.Study).filter_by(folder=folder).first()
+                    if study:
+                        task_record = dbmod.ProcessingTask(
+                            task_id=task.id,
+                            task_name="mri_inference",
+                            study_id=study.id,
+                            input_params={
+                                "age": payload.age,
+                                "gender": payload.gender,
+                                "username": payload.username
+                            }
+                        )
+                        s.add(task_record)
+                        study.current_task_id = task.id
+                        s.commit()
+        
+        return {
+            "ok": True,
+            "task_id": task.id,
+            "message": f"Processing started for study {folder}",
+            "check_status_url": f"/task-status/{task.id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to start processing for {folder}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/task-status/{task_id}")
+def get_task_status(task_id: str) -> TaskStatusResponse:
+    """Get status of a Celery task."""
+    try:
+        # Get task result from Celery
+        task_result = celery_app.AsyncResult(task_id)
+        
+        # Get detailed info from database
+        task_info = None
+        if dbmod:
+            with db_session() as s:
+                if s is not None:
+                    task_record = s.query(dbmod.ProcessingTask).filter_by(task_id=task_id).first()
+                    if task_record:
+                        task_info = {
+                            "progress": task_record.progress,
+                            "error_info": task_record.error_info,
+                            "started_at": task_record.started_at.isoformat() if task_record.started_at else None,
+                            "completed_at": task_record.completed_at.isoformat() if task_record.completed_at else None,
+                        }
+        
+        return TaskStatusResponse(
+            task_id=task_id,
+            status=task_result.status,
+            progress=task_info.get("progress", 0) if task_info else 0,
+            result=task_result.result if task_result.successful() else None,
+            error_info=task_info.get("error_info") if task_info else str(task_result.info) if task_result.failed() else None
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get task status for {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/study/{folder}/results")
+def get_study_results(folder: str):
+    """Get analysis results for a completed study."""
+    try:
+        if not dbmod:
+            raise HTTPException(status_code=503, detail="Database not available")
+        
+        with db_session() as s:
+            if s is not None:
+                study = s.query(dbmod.Study).filter_by(folder=folder).first()
+                if not study:
+                    raise HTTPException(status_code=404, detail=f"Study not found: {folder}")
+                
+                if study.status != "Completed":
+                    return {
+                        "status": study.status,
+                        "message": f"Study is not completed yet. Current status: {study.status}",
+                        "current_task_id": study.current_task_id
+                    }
+                
+                return {
+                    "status": "completed",
+                    "normative_results": study.normative_results,
+                    "brainage_results": study.brainage_results,
+                    "metadata": {
+                        "age": study.age,
+                        "gender": study.gender,
+                        "completed_by": study.completed_by,
+                        "last_updated": study.last_updated.isoformat() if study.last_updated else None
+                    }
+                }
+            else:
+                raise HTTPException(status_code=503, detail="Database session unavailable")
+                
+    except Exception as e:
+        logger.error(f"Failed to get results for study {folder}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Basic health check
