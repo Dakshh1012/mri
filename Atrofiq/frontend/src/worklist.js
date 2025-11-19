@@ -339,10 +339,34 @@ export default function Worklist() {
     setShowDeleteConfirm(true);
   };
   const confirmDelete = async () => {
-    // Placeholder: implement API delete if available
-    console.log('Delete', toDelete);
-    setShowDeleteConfirm(false);
-    setToDelete(null);
+    if (!toDelete) {
+      setShowDeleteConfirm(false);
+      return;
+    }
+
+    try {
+      // Call the backend API to delete the study
+      const response = await axios.delete(`${API_BASE_URL}/study/${toDelete.folder_name}`);
+      
+      if (response.status === 200) {
+        // Remove the study from the local state
+        setData(prevData => prevData.filter(study => study.folder_name !== toDelete.folder_name));
+        
+        // Show success message (you can add a toast notification here if needed)
+        console.log('Study deleted successfully:', response.data.message);
+        
+        // Optionally refresh the data from server to ensure consistency
+        loadData(currentPage, pageSize);
+      }
+    } catch (error) {
+      console.error('Error deleting study:', error);
+      
+      // Show error message to user (you can add a toast notification here)
+      alert(`Failed to delete study: ${error.response?.data?.detail || error.message}`);
+    } finally {
+      setShowDeleteConfirm(false);
+      setToDelete(null);
+    }
   };
   const cancelDelete = () => {
     setShowDeleteConfirm(false);

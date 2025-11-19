@@ -162,7 +162,7 @@ def run_mri_inference(self, study_folder: str, age: str, gender: str, username: 
             logger.info("Running normative modeling...")
             with open(local_nifti_path, 'rb') as nifti_file:
                 files = {'nifti_file': nifti_file}
-                data = {'age': float(age), 'gender': gender}
+                data = {'age': str(age), 'gender': str(gender)}
                 
                 normative_result = call_mrbrain_api('/normative', files=files, data=data)
             
@@ -173,7 +173,7 @@ def run_mri_inference(self, study_folder: str, age: str, gender: str, username: 
             logger.info("Running brain age prediction...")
             with open(local_nifti_path, 'rb') as nifti_file:
                 files = {'nifti_file': nifti_file}
-                data = {'age': float(age), 'gender': gender}
+                data = {'age': str(age), 'gender': str(gender)}
                 
                 brainage_result = call_mrbrain_api('/brain-age', files=files, data=data)
             

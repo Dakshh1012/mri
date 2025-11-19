@@ -526,6 +526,61 @@ def health():
     return {"status": "ok"}
 
 
+@app.delete("/study/{folder}")
+async def delete_study(folder: str):
+    """Delete a study folder and all its contents from storage and database"""
+    try:
+        client = minio_client()
+        
+        # List all objects in the folder
+        objects_to_delete = []
+        try:
+            for obj in client.list_objects(MINIO_BUCKET, prefix=f"{folder}/", recursive=True):
+                objects_to_delete.append(obj.object_name)
+        except Exception as e:
+            logger.error(f"Error listing objects for deletion in folder {folder}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to list objects: {str(e)}")
+        
+        # Delete all objects in the folder one by one
+        deleted_count = 0
+        if objects_to_delete:
+            try:
+                for obj_name in objects_to_delete:
+                    try:
+                        client.remove_object(MINIO_BUCKET, obj_name)
+                        deleted_count += 1
+                        logger.debug(f"Deleted object: {obj_name}")
+                    except Exception as obj_error:
+                        logger.error(f"Error deleting object {obj_name}: {obj_error}")
+                        # Continue with other objects even if one fails
+                logger.info(f"Deleted {deleted_count} objects from folder {folder}")
+            except Exception as e:
+                logger.error(f"Error deleting objects from folder {folder}: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to delete objects: {str(e)}")
+        
+        # Delete from database if database is available
+        if dbmod:
+            try:
+                with db_session() as db:
+                    # Find and delete the study record
+                    study = db.query(dbmod.Study).filter_by(folder_name=folder).first()
+                    if study:
+                        db.delete(study)
+                        db.commit()
+                        logger.info(f"Deleted study record for folder {folder} from database")
+            except Exception as e:
+                logger.error(f"Error deleting study from database: {e}")
+                # Continue even if database deletion fails
+        
+        return {"message": f"Study {folder} deleted successfully", "deleted_objects": deleted_count}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting study {folder}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete study: {str(e)}")
+
+
 @app.get("/folders/{folder}/nifti-url")
 def presign_nifti_url(
     folder: str,
