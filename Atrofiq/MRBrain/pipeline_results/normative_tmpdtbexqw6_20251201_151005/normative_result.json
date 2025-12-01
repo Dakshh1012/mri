@@ -1,0 +1,41 @@
+{
+  "job_id": "01b63ae4-8bf0-437f-a1a1-537bfceec5f1",
+  "participant_id": "tmpdtbexqw6",
+  "status": "error_fallback",
+  "chronological_age": 55.0,
+  "sex": "F",
+  "percentile_scores": {},
+  "z_scores": {},
+  "outlier_regions": [],
+  "processing_time_seconds": 0.98,
+  "volumetric_features": {
+    "total_brain": 95932056.0,
+    "csf": 54432144.0,
+    "gray_matter": 16070720.0,
+    "white_matter": 25429192.0,
+    "left_hemisphere": 48846032.0,
+    "right_hemisphere": 47086024.0,
+    "frontal_approximation": 4017680.0,
+    "parietal_approximation": 3214144.0,
+    "temporal_approximation": 3535558.4,
+    "occipital_approximation": 2410608.0,
+    "cerebellum_approximation": 2892729.6,
+    "caudate_approximation": 482121.6,
+    "putamen_approximation": 642828.8,
+    "pallidum_approximation": 241060.8,
+    "hippocampus_approximation": 401768.0,
+    "amygdala_approximation": 160707.2,
+    "thalamus_approximation": 723182.4,
+    "lateral_ventricles_approximation": 32659286.4,
+    "third_ventricle_approximation": 5443214.4,
+    "fourth_ventricle_approximation": 2721607.2
+  },
+  "metadata": {
+    "participant_id": "tmpdtbexqw6",
+    "age": 55.0,
+    "sex": "F",
+    "file_path": "C:\\Users\\Daksh\\Desktop\\mri\\Atrofiq\\MRBrain\\temp_processing\\01b63ae4-8bf0-437f-a1a1-537bfceec5f1\\tmpdtbexqw6.nii.gz",
+    "timestamp": "2025-12-01T15:10:04.432873"
+  },
+  "percentile_curves": null
+}

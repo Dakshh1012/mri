@@ -528,57 +528,152 @@ def health():
 
 @app.delete("/study/{folder}")
 async def delete_study(folder: str):
-    """Delete a study folder and all its contents from storage and database"""
+    """Delete a study folder and all its contents from ALL storage systems"""
+    deletion_summary = {
+        "folder": folder,
+        "minio_objects_deleted": 0,
+        "database_records_deleted": 0,
+        "redis_keys_cleared": 0,
+        "errors": []
+    }
+    
     try:
+        # 1. MINIO CLEANUP - Delete all files in the study folder
+        logger.info(f"Starting complete deletion for study folder: {folder}")
         client = minio_client()
         
-        # List all objects in the folder
         objects_to_delete = []
         try:
             for obj in client.list_objects(MINIO_BUCKET, prefix=f"{folder}/", recursive=True):
                 objects_to_delete.append(obj.object_name)
         except Exception as e:
-            logger.error(f"Error listing objects for deletion in folder {folder}: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to list objects: {str(e)}")
+            logger.error(f"Error listing MinIO objects for deletion in folder {folder}: {e}")
+            deletion_summary["errors"].append(f"MinIO list error: {str(e)}")
         
         # Delete all objects in the folder one by one
-        deleted_count = 0
         if objects_to_delete:
             try:
                 for obj_name in objects_to_delete:
                     try:
                         client.remove_object(MINIO_BUCKET, obj_name)
-                        deleted_count += 1
-                        logger.debug(f"Deleted object: {obj_name}")
+                        deletion_summary["minio_objects_deleted"] += 1
+                        logger.debug(f"Deleted MinIO object: {obj_name}")
                     except Exception as obj_error:
-                        logger.error(f"Error deleting object {obj_name}: {obj_error}")
-                        # Continue with other objects even if one fails
-                logger.info(f"Deleted {deleted_count} objects from folder {folder}")
+                        logger.error(f"Error deleting MinIO object {obj_name}: {obj_error}")
+                        deletion_summary["errors"].append(f"MinIO object {obj_name}: {str(obj_error)}")
+                logger.info(f"Deleted {deletion_summary['minio_objects_deleted']} objects from MinIO folder {folder}")
             except Exception as e:
-                logger.error(f"Error deleting objects from folder {folder}: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to delete objects: {str(e)}")
+                logger.error(f"Error deleting MinIO objects from folder {folder}: {e}")
+                deletion_summary["errors"].append(f"MinIO deletion error: {str(e)}")
         
-        # Delete from database if database is available
+        # 2. REDIS CLEANUP - Clear any cached task data or results
+        try:
+            import redis
+            redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+            
+            # Get all keys related to this study/folder
+            study_keys = []
+            all_keys = redis_client.keys('*')
+            
+            for key in all_keys:
+                # Look for keys that might contain the folder name or study info
+                if folder in str(key):
+                    study_keys.append(key)
+                # Also check for Celery task result keys
+                elif 'celery-task-meta-' in key:
+                    try:
+                        # Check if the task result contains our folder
+                        result = redis_client.get(key)
+                        if result and folder in str(result):
+                            study_keys.append(key)
+                    except:
+                        pass  # Skip if we can't read the key
+            
+            # Delete found keys
+            if study_keys:
+                deleted_keys = redis_client.delete(*study_keys)
+                deletion_summary["redis_keys_cleared"] = deleted_keys
+                logger.info(f"Deleted {deleted_keys} Redis keys for study {folder}: {study_keys}")
+            else:
+                logger.info(f"No Redis keys found for study {folder}")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning Redis for study {folder}: {e}")
+            deletion_summary["errors"].append(f"Redis cleanup error: {str(e)}")
+        
+        # 3. POSTGRESQL CLEANUP - Delete study and all related processing tasks
         if dbmod:
             try:
                 with db_session() as db:
-                    # Find and delete the study record
-                    study = db.query(dbmod.Study).filter_by(folder_name=folder).first()
+                    # Find the study record (using correct column name 'folder')
+                    study = db.query(dbmod.Study).filter_by(folder=folder).first()
+                    
                     if study:
+                        # Get current task ID before deletion for Redis cleanup
+                        current_task_id = study.current_task_id
+                        
+                        # Delete all processing tasks for this study (CASCADE will handle this automatically)
+                        tasks_deleted = db.query(dbmod.ProcessingTask).filter_by(study_id=study.id).count()
+                        
+                        # Delete the study record (this will cascade delete processing tasks)
                         db.delete(study)
                         db.commit()
-                        logger.info(f"Deleted study record for folder {folder} from database")
+                        
+                        deletion_summary["database_records_deleted"] = 1 + tasks_deleted  # Study + Tasks
+                        logger.info(f"Deleted study record and {tasks_deleted} processing tasks for folder {folder}")
+                        
+                        # Additional Redis cleanup for current task if it exists
+                        if current_task_id:
+                            try:
+                                import redis
+                                redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+                                task_result_key = f"celery-task-meta-{current_task_id}"
+                                if redis_client.exists(task_result_key):
+                                    redis_client.delete(task_result_key)
+                                    deletion_summary["redis_keys_cleared"] += 1
+                                    logger.info(f"Deleted Redis task result for {current_task_id}")
+                            except:
+                                pass  # Non-critical if we can't clean this up
+                    else:
+                        logger.warning(f"Study record not found in database for folder {folder}")
+                        deletion_summary["errors"].append("Study not found in database")
+                        
             except Exception as e:
                 logger.error(f"Error deleting study from database: {e}")
-                # Continue even if database deletion fails
+                deletion_summary["errors"].append(f"Database deletion error: {str(e)}")
         
-        return {"message": f"Study {folder} deleted successfully", "deleted_objects": deleted_count}
+        # 4. SUMMARY AND RESPONSE
+        total_deleted = (deletion_summary["minio_objects_deleted"] + 
+                        deletion_summary["database_records_deleted"] + 
+                        deletion_summary["redis_keys_cleared"])
+        
+        if deletion_summary["errors"]:
+            logger.warning(f"Study {folder} deletion completed with {len(deletion_summary['errors'])} errors")
+            return {
+                "message": f"Study {folder} deletion completed with some errors",
+                "summary": deletion_summary,
+                "total_items_deleted": total_deleted,
+                "status": "partial_success"
+            }
+        else:
+            logger.info(f"Study {folder} completely deleted from all storage systems")
+            return {
+                "message": f"Study {folder} completely deleted from all storage systems",
+                "summary": deletion_summary,
+                "total_items_deleted": total_deleted,
+                "status": "success"
+            }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error deleting study {folder}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete study: {str(e)}")
+        logger.error(f"Unexpected error during complete deletion of study {folder}: {e}")
+        deletion_summary["errors"].append(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "message": f"Failed to delete study {folder}",
+            "summary": deletion_summary,
+            "error": str(e)
+        })
 
 
 @app.get("/folders/{folder}/nifti-url")

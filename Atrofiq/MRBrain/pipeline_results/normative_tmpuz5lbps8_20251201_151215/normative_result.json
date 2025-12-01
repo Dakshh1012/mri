@@ -1,0 +1,41 @@
+{
+  "job_id": "410411ab-1319-4d54-b7f0-9c580ae405b7",
+  "participant_id": "tmpuz5lbps8",
+  "status": "error_fallback",
+  "chronological_age": 1.0,
+  "sex": "M",
+  "percentile_scores": {},
+  "z_scores": {},
+  "outlier_regions": [],
+  "processing_time_seconds": 1.75,
+  "volumetric_features": {
+    "total_brain": 94911824.0,
+    "csf": 48336408.0,
+    "gray_matter": 19565664.0,
+    "white_matter": 27009752.0,
+    "left_hemisphere": 48539552.0,
+    "right_hemisphere": 46372272.0,
+    "frontal_approximation": 4891416.0,
+    "parietal_approximation": 3913132.8000000003,
+    "temporal_approximation": 4304446.08,
+    "occipital_approximation": 2934849.6,
+    "cerebellum_approximation": 3521819.52,
+    "caudate_approximation": 586969.9199999999,
+    "putamen_approximation": 782626.56,
+    "pallidum_approximation": 293484.95999999996,
+    "hippocampus_approximation": 489141.60000000003,
+    "amygdala_approximation": 195656.64,
+    "thalamus_approximation": 880454.88,
+    "lateral_ventricles_approximation": 29001844.8,
+    "third_ventricle_approximation": 4833640.8,
+    "fourth_ventricle_approximation": 2416820.4
+  },
+  "metadata": {
+    "participant_id": "tmpuz5lbps8",
+    "age": 1.0,
+    "sex": "M",
+    "file_path": "C:\\Users\\Daksh\\Desktop\\mri\\Atrofiq\\MRBrain\\temp_processing\\410411ab-1319-4d54-b7f0-9c580ae405b7\\tmpuz5lbps8.nii.gz",
+    "timestamp": "2025-12-01T15:12:14.149634"
+  },
+  "percentile_curves": null
+}

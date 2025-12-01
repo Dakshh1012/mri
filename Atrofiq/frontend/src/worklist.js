@@ -224,6 +224,22 @@ export default function Worklist() {
   // Status helpers
   const getStatusKey = (s) => (s || 'unknown').toString().toLowerCase();
   const getStatusLabel = (s) => s || 'Unknown';
+  
+  // Status type display helper
+  const getStatusTypeDisplay = (status) => {
+    switch ((status || '').toString().toLowerCase()) {
+      case 'available':
+      case 'received':
+        return 'received';
+      case 'processing':
+        return 'processing';
+      case 'completed':
+      case 'processed':
+        return 'processed';
+      default:
+        return 'received';
+    }
+  };
 
   // Actions
   const handleAnnotateClick = async (entry) => {
@@ -335,6 +351,9 @@ export default function Worklist() {
 
   // Print actions removed
   const deleteStudy = (entry) => {
+    console.log('DEBUG - Delete study entry:', entry);
+    console.log('DEBUG - Entry raw data:', entry._raw);
+    console.log('DEBUG - Entry id:', entry.id);
     setToDelete(entry);
     setShowDeleteConfirm(true);
   };
@@ -345,24 +364,62 @@ export default function Worklist() {
     }
 
     try {
-      // Call the backend API to delete the study
-      const response = await axios.delete(`${API_BASE_URL}/study/${toDelete.folder_name}`);
+      // Get the folder name from the entry - check multiple possible fields
+      const folderName = toDelete._raw?.folder || toDelete._raw?.name || toDelete.id;
+      
+      if (!folderName) {
+        alert('Error: Could not determine study folder name for deletion');
+        setShowDeleteConfirm(false);
+        setToDelete(null);
+        return;
+      }
+
+      // Call the backend API to delete the study from ALL storage systems
+      const response = await axios.delete(`${API_BASE_URL}/study/${folderName}`);
       
       if (response.status === 200) {
-        // Remove the study from the local state
-        setData(prevData => prevData.filter(study => study.folder_name !== toDelete.folder_name));
+        const result = response.data;
         
-        // Show success message (you can add a toast notification here if needed)
-        console.log('Study deleted successfully:', response.data.message);
+        // Remove the study from the local state immediately
+        setFolders(prevFolders => prevFolders.filter(study => 
+          (study.folder || study.name) !== folderName
+        ));
         
-        // Optionally refresh the data from server to ensure consistency
-        loadData(currentPage, pageSize);
+        // Show detailed success message based on deletion summary
+        if (result.status === 'success') {
+          console.log('✅ Complete deletion successful:', result.summary);
+          alert(`Study "${folderName}" completely deleted!\n\n` +
+                `📁 MinIO Files: ${result.summary.minio_objects_deleted}\n` +
+                `🗄️ Database Records: ${result.summary.database_records_deleted}\n` +
+                `⚡ Redis Keys: ${result.summary.redis_keys_cleared}\n` +
+                `📊 Total Items: ${result.total_items_deleted}`);
+        } else if (result.status === 'partial_success') {
+          console.warn('⚠️ Partial deletion:', result.summary);
+          alert(`Study "${folderName}" mostly deleted with some errors:\n\n` +
+                `✅ Deleted: ${result.total_items_deleted} items\n` +
+                `⚠️ Errors: ${result.summary.errors.length}\n\n` +
+                `Check console for details.`);
+          console.log('Deletion errors:', result.summary.errors);
+        }
+        
+        // Refresh the data from server to ensure consistency
+        fetchFolders();
       }
     } catch (error) {
-      console.error('Error deleting study:', error);
+      console.error('❌ Error deleting study:', error);
       
-      // Show error message to user (you can add a toast notification here)
-      alert(`Failed to delete study: ${error.response?.data?.detail || error.message}`);
+      // Show detailed error message to user
+      const errorDetail = error.response?.data?.detail;
+      if (errorDetail && typeof errorDetail === 'object') {
+        const folderName = toDelete._raw?.folder || toDelete._raw?.name || toDelete.id || 'Unknown';
+        alert(`Failed to delete study "${folderName}":\n\n` +
+              `Error: ${errorDetail.error}\n` +
+              `Deleted: ${errorDetail.summary?.total_items_deleted || 0} items\n` +
+              `Errors: ${errorDetail.summary?.errors?.length || 0}`);
+        console.log('Deletion error details:', errorDetail.summary);
+      } else {
+        alert(`Failed to delete study: ${errorDetail || error.message}`);
+      }
     } finally {
       setShowDeleteConfirm(false);
       setToDelete(null);
@@ -640,7 +697,7 @@ export default function Worklist() {
                     <td className="col-status p-3">
                       <span className={`status-badge inline-flex items-center gap-2 px-2 py-0.5 rounded-full text-xs font-medium ${statusClass(getStatusKey(entry.Status))}`}>
                         <span className={`status-dot w-1.5 h-1.5 rounded-full ${dotClass(getStatusKey(entry.Status))}`}></span>
-                        {getStatusLabel(entry.Status)}
+                        {getStatusTypeDisplay(entry.Status)}
                       </span>
                     </td>
                     <td className="col-createdby p-3">
