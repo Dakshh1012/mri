@@ -11,3 +11,4 @@ redis==4.6.0
 kombu==5.3.2
 flower==2.0.1
 requests==2.31.0
+pydicom==3.0.1

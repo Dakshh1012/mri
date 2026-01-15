@@ -1,0 +1,71 @@
+{
+  "Name" : "AtrofIQ DICOM Server",
+  "StorageDirectory" : "/var/lib/orthanc/db",
+  "IndexDirectory" : "/var/lib/orthanc/db",
+  "StorageCompression" : false,
+  "MaximumStorageSize" : 0,
+  "MaximumPatientCount" : 0,
+  
+  "HttpServerEnabled" : true,
+  "HttpPort" : 8042,
+  "HttpCompressionEnabled" : true,
+  "HttpKeepAlive" : true,
+  
+  "DicomServerEnabled" : true,
+  "DicomAet" : "ATROFIQ",
+  "DicomPort" : 4242,
+  "DicomKeepAlive" : true,
+  
+  "RemoteAccessAllowed" : true,
+  "AuthenticationEnabled" : true,
+  "RegisteredUsers" : {
+    "orthanc" : "orthanc"
+  },
+  
+  "DicomModalities" : {
+  },
+  
+  "OrthancPeers" : {
+  },
+  
+  "HttpTimeout" : 60,
+  "HttpRequestTimeout" : 30,
+  
+  "DicomAssociationCloseDelay" : 5,
+  "DicomScuTimeout" : 10,
+  
+  "UserMetadata" : {
+    "AtrofiqStudyId" : 1024,
+    "AtrofiqFolderId" : 1025,
+    "AtrofiqUploadedBy" : 1026
+  },
+  
+  "DefaultEncoding" : "Latin1",
+  "AcceptedTransferSyntaxes" : [ "1.2.840.10008.1.*" ],
+  
+  "UnknownSopClassAccepted" : false,
+  "DicomScuPreferredTransferSyntax" : "1.2.840.10008.1.2.1",
+  
+  "DicomTlsEnabled" : false,
+  
+  "JobsHistorySize" : 10,
+  "SaveJobs" : true,
+  
+  "OverwriteInstances" : false,
+  
+  "MediaArchiveSize" : 1,
+  "StoreMD5ForAttachments" : true,
+  
+  "LimitFindResults" : 0,
+  "LimitFindInstances" : 0,
+  
+  "LogExportedResources" : false,
+  "KeepAlive" : true,
+  "TcpNoDelay" : true,
+  
+  "HttpVerbose" : false,
+  "DicomVerbose" : false,
+  
+  "Plugins" : [
+  ]
+}

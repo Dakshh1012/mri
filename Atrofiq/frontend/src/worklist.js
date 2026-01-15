@@ -528,7 +528,12 @@ export default function Worklist() {
             <UploadCloud className="w-4 h-4" />
             Upload Study Files
           </label>
-          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz" onChange={onFileSelected} style={{ display: 'none' }} />
+          <label htmlFor="folderUpload" className="upload-btn" style={{ marginLeft: '8px', backgroundColor: '#059669' }}>
+            <Folder className="w-4 h-4" />
+            Upload Folder
+          </label>
+          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz,.zip" onChange={onFileSelected} style={{ display: 'none' }} />
+          <input id="folderUpload" type="file" webkitdirectory="" multiple onChange={onFileSelected} style={{ display: 'none' }} />
           <div className="inline-field">
             <label htmlFor="age">Age</label>
             <input

@@ -89,6 +89,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ORTHANC_ENDPOINT=orthanc:8042
+      - ORTHANC_USERNAME=orthanc
+      - ORTHANC_PASSWORD=orthanc
     ports:
       - "7000:7000"
     volumes:
@@ -98,6 +101,7 @@ services:
       - postgres
       - redis
       - minio
+      - orthanc
     networks:
       - atrofiq_network
     restart: unless-stopped
@@ -122,6 +126,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - ORTHANC_ENDPOINT=orthanc:8042
+      - ORTHANC_USERNAME=orthanc
+      - ORTHANC_PASSWORD=orthanc
     volumes:
       - ./backend:/app
       - ./MRBrain:/app/MRBrain
@@ -129,6 +136,7 @@ services:
       - postgres
       - redis
       - minio
+      - orthanc
     networks:
       - atrofiq_network
     command: celery -A app.celery_app worker --loglevel=info
@@ -166,6 +174,22 @@ services:
       - atrofiq_network
     restart: unless-stopped
 
+  # Orthanc DICOM Server
+  orthanc:
+    image: orthancteam/orthanc:latest
+    container_name: atrofiq_orthanc
+    environment:
+      - ORTHANC_JSON_FILE=/etc/orthanc/orthanc.json
+    ports:
+      - "8042:8042"  # Web UI and REST API
+      - "4242:4242"  # DICOM protocol
+    volumes:
+      - orthanc_data:/var/lib/orthanc/db
+      - ./orthanc-config:/etc/orthanc
+    networks:
+      - atrofiq_network
+    restart: unless-stopped
+
   # Frontend (React)
   frontend:
     build:
@@ -189,6 +213,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  orthanc_data:
 
 networks:
   atrofiq_network:

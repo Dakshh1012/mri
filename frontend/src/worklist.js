@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_BASE_URL, INFERENCE_API_URL } from './config.js';
+import DicomViewer from './DicomViewer.js';
 import './hka-ui.css';
+import './DicomViewer.css';
 import {
   Folder,
   Play,
@@ -10,7 +12,8 @@ import {
   RefreshCcw,
   Search,
   UploadCloud,
-  Settings
+  Settings,
+  FileImage
 } from 'lucide-react';
 
 // Status class helpers (Tailwind palette approximation)
@@ -93,6 +96,10 @@ export default function Worklist() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   // CRA env var for upload endpoint (defaults to 'upload')
   const uploadEndpoint = (process.env.REACT_APP_UPLOAD_ENDPOINT || 'upload').replace(/^\/+|\/+$/g, '');
+
+  // DICOM Viewer
+  const [showDicomViewer, setShowDicomViewer] = useState(false);
+  const [selectedDicomFolder, setSelectedDicomFolder] = useState(null);
 
   useEffect(() => {
     fetchFolders();
@@ -343,6 +350,17 @@ export default function Worklist() {
     setToDelete(null);
   };
 
+  // DICOM Viewer actions
+  const openDicomViewer = (entry) => {
+    setSelectedDicomFolder(entry.id);
+    setShowDicomViewer(true);
+  };
+  
+  const closeDicomViewer = () => {
+    setShowDicomViewer(false);
+    setSelectedDicomFolder(null);
+  };
+
   // Sorting toggle
   const toggleSort = (field) => {
     if (sortField === field) {
@@ -441,7 +459,12 @@ export default function Worklist() {
             <UploadCloud className="w-4 h-4" />
             Upload Study Files
           </label>
-          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz" onChange={onFileSelected} style={{ display: 'none' }} />
+          <label htmlFor="folderUpload" className="upload-btn" style={{ marginLeft: '8px', backgroundColor: '#059669' }}>
+            <Folder className="w-4 h-4" />
+            Upload Folder
+          </label>
+          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz,.zip" onChange={onFileSelected} style={{ display: 'none' }} />
+          <input id="folderUpload" type="file" webkitdirectory="" multiple onChange={onFileSelected} style={{ display: 'none' }} />
           <div className="inline-field">
             <label htmlFor="age">Age</label>
             <input
@@ -629,6 +652,14 @@ export default function Worklist() {
                           <Trash2 className="w-4 h-4" />
                         </button>
                         <button
+                          onClick={() => openDicomViewer(entry)}
+                          className="px-2 py-1 rounded-md text-sm inline-flex items-center gap-1.5 bg-purple-600 hover:bg-purple-500 text-white transition"
+                          title="View DICOM Files"
+                        >
+                          <FileImage className="w-4 h-4" />
+                          DICOM
+                        </button>
+                        <button
                           onClick={() => handleAnnotateClick(entry)}
                           disabled={annotatingId === entry.id}
                           className={`px-3 py-1 rounded-md text-sm inline-flex items-center gap-1.5 ${
@@ -735,6 +766,14 @@ export default function Worklist() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* DICOM Viewer Modal */}
+      {showDicomViewer && selectedDicomFolder && (
+        <DicomViewer 
+          folder={selectedDicomFolder}
+          onClose={closeDicomViewer}
+        />
       )}
     </div>
     </div>

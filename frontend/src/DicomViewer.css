@@ -1,0 +1,112 @@
+/* DICOM Viewer Styles */
+.dicom-viewer-overlay {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.dicom-viewer-overlay .bg-gray-750 {
+  background-color: rgb(55, 65, 81);
+}
+
+.dicom-viewer-overlay .bg-gray-800 {
+  background-color: rgb(31, 41, 55);
+}
+
+/* Custom scrollbar for DICOM viewer */
+.dicom-viewer-overlay .overflow-auto::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dicom-viewer-overlay .overflow-auto::-webkit-scrollbar-track {
+  background: #374151;
+}
+
+.dicom-viewer-overlay .overflow-auto::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 3px;
+}
+
+.dicom-viewer-overlay .overflow-auto::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Animation for loading states */
+.dicom-loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* DICOM instance card hover effects */
+.dicom-instance-card {
+  transition: all 0.2s ease-in-out;
+}
+
+.dicom-instance-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Preview image styles */
+.dicom-preview-image {
+  transition: transform 0.2s ease-in-out;
+}
+
+.dicom-preview-image:hover {
+  transform: scale(1.05);
+  cursor: pointer;
+}
+
+/* Status badge animations */
+.dicom-status-badge {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Button hover effects */
+.dicom-action-button {
+  transition: all 0.2s ease-in-out;
+}
+
+.dicom-action-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Grid responsive adjustments */
+@media (max-width: 768px) {
+  .dicom-viewer-overlay .max-w-6xl {
+    max-width: 100%;
+    margin: 0.5rem;
+  }
+  
+  .dicom-viewer-overlay .grid-cols-2 {
+    grid-template-columns: 1fr;
+  }
+  
+  .dicom-viewer-overlay .flex-col.items-end {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+  }
+}
+
+/* Dark theme specific adjustments */
+.dicom-viewer-overlay {
+  color-scheme: dark;
+}
+
+.dicom-viewer-overlay input,
+.dicom-viewer-overlay select,
+.dicom-viewer-overlay textarea {
+  background-color: rgb(55, 65, 81);
+  border-color: rgb(75, 85, 99);
+  color: rgb(243, 244, 246);
+}

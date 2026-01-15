@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+import zipfile
+import tempfile
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,9 @@ from contextlib import contextmanager
 # Celery imports
 from .celery_app import celery_app
 from .tasks.mri_processing import run_mri_inference
+
+# DICOM utilities
+from .dicom_utils import get_orthanc_client, is_dicom_file
 
 # Local DB utilities
 try:
@@ -70,6 +75,12 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = env_bool("MINIO_SECURE", False)
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "atrofiq")
+
+# Orthanc DICOM Server Configuration
+ORTHANC_ENDPOINT = os.getenv("ORTHANC_ENDPOINT")
+ORTHANC_USERNAME = os.getenv("ORTHANC_USERNAME", "orthanc")
+ORTHANC_PASSWORD = os.getenv("ORTHANC_PASSWORD", "orthanc")
+ORTHANC_ENABLED = env_bool("ORTHANC_ENABLED", True)
 
 # Frontend origin; allow all for dev by default
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
@@ -164,6 +175,52 @@ class TaskStatusResponse(BaseModel):
     error_info: Optional[str] = None
 
 
+def extract_files_from_zip(zip_content: bytes, original_filename: str) -> List[tuple]:
+    """
+    Extract files from a zip archive.
+    Returns a list of tuples: (filename, file_content)
+    """
+    extracted_files = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as zip_ref:
+            for file_info in zip_ref.filelist:
+                # Skip directories and hidden files
+                if file_info.is_dir() or file_info.filename.startswith('.'):
+                    continue
+                
+                # Extract file content
+                with zip_ref.open(file_info.filename) as file:
+                    file_content = file.read()
+                    # Use just the filename without path
+                    clean_filename = os.path.basename(file_info.filename)
+                    if clean_filename:  # Skip empty filenames
+                        extracted_files.append((clean_filename, file_content))
+                        
+        logger.info(f"Extracted {len(extracted_files)} files from zip archive: {original_filename}")
+        return extracted_files
+        
+    except zipfile.BadZipFile:
+        logger.error(f"Invalid zip file: {original_filename}")
+        raise HTTPException(status_code=400, detail=f"Invalid zip file: {original_filename}")
+    except Exception as e:
+        logger.error(f"Error extracting zip file {original_filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error extracting zip file: {str(e)}")
+
+
+def is_zip_file(filename: str, content: bytes) -> bool:
+    """Check if a file is a zip archive by extension and magic bytes."""
+    if not filename:
+        return False
+    
+    # Check by extension
+    is_zip_ext = filename.lower().endswith('.zip')
+    
+    # Check by magic bytes
+    is_zip_magic = content.startswith(b'PK\x03\x04') or content.startswith(b'PK\x05\x06') or content.startswith(b'PK\x07\x08')
+    
+    return is_zip_ext or is_zip_magic
+
+
 @app.post("/upload")
 async def upload_files(
     files: List[UploadFile] = File(...),
@@ -175,6 +232,7 @@ async def upload_files(
         raise HTTPException(status_code=400, detail="No files provided")
 
     client = minio_client()
+    orthanc_client = get_orthanc_client() if ORTHANC_ENABLED else None
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     folder = f"study-{ts}"
 
@@ -185,27 +243,115 @@ async def upload_files(
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Storage unavailable: cannot access bucket '{MINIO_BUCKET}' at {MINIO_ENDPOINT}: {e}")
 
-    # Save files under a common prefix (folder/filename)
+    # Check Orthanc availability if enabled
+    orthanc_available = False
+    if orthanc_client and ORTHANC_ENABLED:
+        orthanc_available = orthanc_client.is_available()
+        if not orthanc_available:
+            logger.warning("Orthanc server is not available, DICOM files will be stored in MinIO only")
+
+    # Process all files (including extraction from zip files)
+    all_files_to_process = []
+    
+    for f in files:
+        # Read file data once
+        file_content = await f.read()
+        
+        try:
+            # Check if this is a zip file
+            if is_zip_file(f.filename, file_content):
+                logger.info(f"Processing zip file: {f.filename}")
+                # Extract files from zip
+                extracted_files = extract_files_from_zip(file_content, f.filename)
+                
+                for extracted_filename, extracted_content in extracted_files:
+                    all_files_to_process.append({
+                        'filename': extracted_filename,
+                        'content': extracted_content,
+                        'original_source': f"zip:{f.filename}",
+                        'content_type': 'application/octet-stream'  # Will be determined later based on content
+                    })
+            else:
+                # Regular file
+                all_files_to_process.append({
+                    'filename': f.filename,
+                    'content': file_content,
+                    'original_source': 'direct_upload',
+                    'content_type': f.content_type or 'application/octet-stream'
+                })
+        finally:
+            await f.close()
+
+    if not all_files_to_process:
+        raise HTTPException(status_code=400, detail="No valid files found to process")
+
+    # Now process all files (extracted and direct)
     count = 0
     object_keys = []
-    for f in files:
-        # Read stream and upload using multipart (unknown length)
+    dicom_instances = []
+    zip_extractions = []
+    
+    for file_info in all_files_to_process:
+        filename = file_info['filename']
+        file_content = file_info['content']
+        original_source = file_info['original_source']
+        content_type = file_info['content_type']
+        
         try:
-            key = f"{folder}/{f.filename}"
+            # Check if this is a DICOM file
+            is_dicom, dicom_info = is_dicom_file(file_content, filename)
+            
+            if is_dicom and orthanc_available:
+                # Upload to Orthanc if it's a DICOM file and Orthanc is available
+                metadata = {
+                    'study_folder': folder,
+                    'uploaded_by': username or 'system',
+                    'original_source': original_source
+                }
+                
+                instance_id = orthanc_client.upload_dicom(file_content, metadata)
+                if instance_id:
+                    dicom_instances.append({
+                        'filename': filename,
+                        'instance_id': instance_id,
+                        'dicom_info': dicom_info,
+                        'original_source': original_source
+                    })
+                    logger.info(f"DICOM file {filename} uploaded to Orthanc with instance ID: {instance_id}")
+                else:
+                    logger.warning(f"Failed to upload DICOM file {filename} to Orthanc, storing in MinIO")
+            
+            # Always store in MinIO as well for consistency with existing workflow
+            key = f"{folder}/{filename}"
+            # Create a new BytesIO object from the content
+            file_stream = io.BytesIO(file_content)
+            
+            # Determine content type for DICOM files
+            if is_dicom:
+                content_type = "application/dicom"
+            
             client.put_object(
                 MINIO_BUCKET,
                 key,
-                data=f.file,
-                length=-1,
-                part_size=10 * 1024 * 1024,  # 10MB parts
-                content_type=f.content_type or "application/octet-stream",
+                data=file_stream,
+                length=len(file_content),
+                content_type=content_type,
             )
             count += 1
             object_keys.append(key)
+            
+            # Track zip extractions for metadata
+            if original_source.startswith('zip:'):
+                zip_source = original_source.replace('zip:', '')
+                zip_extractions.append({
+                    'zip_file': zip_source,
+                    'extracted_file': filename,
+                    'is_dicom': is_dicom
+                })
+            
         except Exception as e:
+            logger.error(f"Error processing file {filename}: {e}")
             raise HTTPException(status_code=503, detail=f"Storage unavailable during upload: {e}")
-        finally:
-            await f.close()
 
     # Write metadata file for the folder
     meta = {
@@ -217,6 +363,12 @@ async def upload_files(
         "last_updated": now_iso(),
         "processing_by": None,
         "completed_by": None,
+        "dicom_instances": dicom_instances,  # Include DICOM information
+        "orthanc_available": orthanc_available,
+        "total_files": count,
+        "dicom_files": len(dicom_instances),
+        "zip_extractions": zip_extractions,  # Track which files came from zip archives
+        "processing_notes": f"Processed {len(all_files_to_process)} files from {len(files)} uploaded files"
     }
     try:
         put_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json", json.dumps(meta))
@@ -242,9 +394,12 @@ async def upload_files(
     except Exception as e:
         logging.getLogger("atrofiq").warning("DB insert failed for folder %s: %s", folder, e)
 
-    # Auto-start processing if age and gender are provided
+    # Auto-start processing if age and gender are provided AND no DICOM files are present
+    # DICOM files require different processing pipeline (not NIfTI-based MRI inference)
     task_id = None
-    if age and gender:
+    skip_auto_processing = len(dicom_instances) > 0
+    
+    if age and gender and not skip_auto_processing:
         try:
             task = run_mri_inference.delay(
                 study_folder=folder,
@@ -282,8 +437,262 @@ async def upload_files(
             
         except Exception as e:
             logger.error(f"Failed to auto-start processing for {folder}: {e}")
+    elif skip_auto_processing:
+        logger.info(f"Skipping auto-processing for {folder} - contains DICOM files which require different processing pipeline")
 
-    return {"ok": True, "folder": folder, "files_count": count, "task_id": task_id, "auto_processing_started": task_id is not None}
+    return {
+        "ok": True, 
+        "folder": folder, 
+        "files_count": count, 
+        "task_id": task_id, 
+        "auto_processing_started": task_id is not None,
+        "auto_processing_skipped": skip_auto_processing,
+        "auto_processing_skip_reason": "DICOM files detected - requires different processing pipeline" if skip_auto_processing else None,
+        "dicom_files": len(dicom_instances),
+        "dicom_instances": dicom_instances,
+        "orthanc_available": orthanc_available,
+        "zip_extractions": zip_extractions,
+        "total_uploaded_files": len(files),
+        "total_processed_files": len(all_files_to_process)
+    }
+
+
+@app.get("/orthanc/status")
+def orthanc_status():
+    """Get Orthanc server status and configuration."""
+    if not ORTHANC_ENABLED:
+        return {"enabled": False, "message": "Orthanc integration disabled"}
+    
+    orthanc_client = get_orthanc_client()
+    if not orthanc_client:
+        return {"enabled": True, "available": False, "message": "Orthanc not configured"}
+    
+    available = orthanc_client.is_available()
+    return {
+        "enabled": True,
+        "available": available,
+        "endpoint": ORTHANC_ENDPOINT,
+        "message": "Orthanc server is reachable" if available else "Orthanc server is not reachable"
+    }
+
+
+@app.get("/orthanc/studies")
+def list_orthanc_studies():
+    """List all studies stored in Orthanc."""
+    if not ORTHANC_ENABLED:
+        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
+    
+    orthanc_client = get_orthanc_client()
+    if not orthanc_client or not orthanc_client.is_available():
+        raise HTTPException(status_code=503, detail="Orthanc server not available")
+    
+    try:
+        response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies")
+        if response.status_code == 200:
+            studies = response.json()
+            study_details = []
+            
+            for study_id in studies:
+                study_response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies/{study_id}")
+                if study_response.status_code == 200:
+                    study_info = study_response.json()
+                    study_details.append({
+                        'id': study_id,
+                        'patient_id': study_info.get('PatientMainDicomTags', {}).get('PatientID'),
+                        'patient_name': study_info.get('PatientMainDicomTags', {}).get('PatientName'),
+                        'study_date': study_info.get('MainDicomTags', {}).get('StudyDate'),
+                        'study_description': study_info.get('MainDicomTags', {}).get('StudyDescription'),
+                        'study_instance_uid': study_info.get('MainDicomTags', {}).get('StudyInstanceUID'),
+                        'series_count': len(study_info.get('Series', [])),
+                        'instances_count': sum(len(series.get('Instances', [])) for series in study_info.get('Series', []))
+                    })
+            
+            return {"studies": study_details}
+        else:
+            raise HTTPException(status_code=response.status_code, detail="Failed to fetch studies from Orthanc")
+            
+    except Exception as e:
+        logger.error(f"Error fetching studies from Orthanc: {e}")
+        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
+
+
+@app.get("/orthanc/studies/{study_id}")
+def get_orthanc_study_details(study_id: str):
+    """Get detailed information about a specific DICOM study including series and instances."""
+    if not ORTHANC_ENABLED:
+        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
+    
+    orthanc_client = get_orthanc_client()
+    if not orthanc_client or not orthanc_client.is_available():
+        raise HTTPException(status_code=503, detail="Orthanc server not available")
+    
+    try:
+        study_response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies/{study_id}")
+        if study_response.status_code == 200:
+            study_info = study_response.json()
+            
+            # Get detailed series information
+            series_details = []
+            for series_id in study_info.get('Series', []):
+                series_response = orthanc_client.session.get(f"{orthanc_client.base_url}/series/{series_id}")
+                if series_response.status_code == 200:
+                    series_info = series_response.json()
+                    series_details.append({
+                        'id': series_id,
+                        'series_description': series_info.get('MainDicomTags', {}).get('SeriesDescription'),
+                        'modality': series_info.get('MainDicomTags', {}).get('Modality'),
+                        'series_number': series_info.get('MainDicomTags', {}).get('SeriesNumber'),
+                        'instances': series_info.get('Instances', []),
+                        'instances_count': len(series_info.get('Instances', []))
+                    })
+            
+            return {
+                'id': study_id,
+                'patient_id': study_info.get('PatientMainDicomTags', {}).get('PatientID'),
+                'patient_name': study_info.get('PatientMainDicomTags', {}).get('PatientName'),
+                'study_date': study_info.get('MainDicomTags', {}).get('StudyDate'),
+                'study_time': study_info.get('MainDicomTags', {}).get('StudyTime'),
+                'study_description': study_info.get('MainDicomTags', {}).get('StudyDescription'),
+                'study_instance_uid': study_info.get('MainDicomTags', {}).get('StudyInstanceUID'),
+                'accession_number': study_info.get('MainDicomTags', {}).get('AccessionNumber'),
+                'series': series_details,
+                'series_count': len(series_details),
+                'instances_count': sum(len(series.get('Instances', [])) for series in series_details)
+            }
+        elif study_response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Study not found")
+        else:
+            raise HTTPException(status_code=study_response.status_code, detail="Failed to fetch study from Orthanc")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching study {study_id} from Orthanc: {e}")
+        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
+
+
+@app.get("/orthanc/instances/{instance_id}/file")
+def download_dicom_instance(instance_id: str):
+    """Download a DICOM instance file."""
+    if not ORTHANC_ENABLED:
+        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
+    
+    orthanc_client = get_orthanc_client()
+    if not orthanc_client or not orthanc_client.is_available():
+        raise HTTPException(status_code=503, detail="Orthanc server not available")
+    
+    try:
+        # Get instance info first to get filename
+        instance_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}")
+        if instance_response.status_code != 200:
+            raise HTTPException(status_code=404, detail="Instance not found")
+            
+        instance_info = instance_response.json()
+        sop_instance_uid = instance_info.get('MainDicomTags', {}).get('SOPInstanceUID', instance_id)
+        
+        # Download the DICOM file
+        file_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}/file")
+        if file_response.status_code == 200:
+            from fastapi.responses import Response
+            return Response(
+                content=file_response.content,
+                media_type="application/dicom",
+                headers={
+                    "Content-Disposition": f"attachment; filename={sop_instance_uid}.dcm"
+                }
+            )
+        elif file_response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Instance file not found")
+        else:
+            raise HTTPException(status_code=file_response.status_code, detail="Failed to download instance from Orthanc")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading instance {instance_id} from Orthanc: {e}")
+        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
+
+
+@app.get("/orthanc/instances/{instance_id}/preview")
+def get_dicom_instance_preview(instance_id: str):
+    """Get a preview image (PNG) of a DICOM instance."""
+    if not ORTHANC_ENABLED:
+        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
+    
+    orthanc_client = get_orthanc_client()
+    if not orthanc_client or not orthanc_client.is_available():
+        raise HTTPException(status_code=503, detail="Orthanc server not available")
+    
+    try:
+        # Try to get the preview image
+        preview_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}/preview")
+        if preview_response.status_code == 200:
+            from fastapi.responses import Response
+            return Response(
+                content=preview_response.content,
+                media_type="image/png"
+            )
+        elif preview_response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Instance or preview not found")
+        else:
+            raise HTTPException(status_code=preview_response.status_code, detail="Failed to get preview from Orthanc")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting preview for instance {instance_id} from Orthanc: {e}")
+        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
+
+
+@app.get("/folders/{folder}/dicom-studies")
+def get_folder_dicom_studies(folder: str):
+    """Get DICOM studies associated with a specific folder."""
+    client = minio_client()
+    
+    # Get folder metadata
+    meta_text = get_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json")
+    if not meta_text:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    try:
+        meta = json.loads(meta_text)
+        dicom_instances = meta.get('dicom_instances', [])
+        
+        if not dicom_instances:
+            return {"folder": folder, "dicom_instances": [], "message": "No DICOM files in this folder"}
+        
+        # If Orthanc is available, fetch current information
+        if ORTHANC_ENABLED:
+            orthanc_client = get_orthanc_client()
+            if orthanc_client and orthanc_client.is_available():
+                # Update DICOM instance information with current Orthanc data
+                for instance in dicom_instances:
+                    instance_id = instance.get('instance_id')
+                    if instance_id:
+                        try:
+                            instance_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}")
+                            if instance_response.status_code == 200:
+                                instance_info = instance_response.json()
+                                instance['current_status'] = 'available'
+                                instance['tags'] = instance_info.get('MainDicomTags', {})
+                            else:
+                                instance['current_status'] = 'not_found'
+                        except Exception:
+                            instance['current_status'] = 'error'
+                    else:
+                        instance['current_status'] = 'no_instance_id'
+        
+        return {
+            "folder": folder,
+            "dicom_instances": dicom_instances,
+            "orthanc_available": ORTHANC_ENABLED and orthanc_client and orthanc_client.is_available() if ORTHANC_ENABLED else False
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid folder metadata")
+    except Exception as e:
+        logger.error(f"Error getting DICOM studies for folder {folder}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving DICOM studies: {str(e)}")
 
 
 @app.get("/folders/")
