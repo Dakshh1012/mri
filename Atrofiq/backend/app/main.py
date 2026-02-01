@@ -1,11 +1,10 @@
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
-import zipfile
-import tempfile
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,11 +15,19 @@ import logging
 import subprocess
 from contextlib import contextmanager
 
+# Image processing
+try:
+    from PIL import Image
+    import numpy as np
+    IMAGE_PROCESSING_AVAILABLE = True
+except ImportError:
+    IMAGE_PROCESSING_AVAILABLE = False
+
 # Celery imports
 from .celery_app import celery_app
-from .tasks.mri_processing import run_mri_inference
+from .tasks.mri_processing_v2 import run_mri_inference_v2 as run_mri_inference
 
-# DICOM utilities
+# DICOM integration
 from .dicom_utils import get_orthanc_client, is_dicom_file
 
 # Local DB utilities
@@ -75,12 +82,6 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_SECURE = env_bool("MINIO_SECURE", False)
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "atrofiq")
-
-# Orthanc DICOM Server Configuration
-ORTHANC_ENDPOINT = os.getenv("ORTHANC_ENDPOINT")
-ORTHANC_USERNAME = os.getenv("ORTHANC_USERNAME", "orthanc")
-ORTHANC_PASSWORD = os.getenv("ORTHANC_PASSWORD", "orthanc")
-ORTHANC_ENABLED = env_bool("ORTHANC_ENABLED", True)
 
 # Frontend origin; allow all for dev by default
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
@@ -175,52 +176,6 @@ class TaskStatusResponse(BaseModel):
     error_info: Optional[str] = None
 
 
-def extract_files_from_zip(zip_content: bytes, original_filename: str) -> List[tuple]:
-    """
-    Extract files from a zip archive.
-    Returns a list of tuples: (filename, file_content)
-    """
-    extracted_files = []
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_content), 'r') as zip_ref:
-            for file_info in zip_ref.filelist:
-                # Skip directories and hidden files
-                if file_info.is_dir() or file_info.filename.startswith('.'):
-                    continue
-                
-                # Extract file content
-                with zip_ref.open(file_info.filename) as file:
-                    file_content = file.read()
-                    # Use just the filename without path
-                    clean_filename = os.path.basename(file_info.filename)
-                    if clean_filename:  # Skip empty filenames
-                        extracted_files.append((clean_filename, file_content))
-                        
-        logger.info(f"Extracted {len(extracted_files)} files from zip archive: {original_filename}")
-        return extracted_files
-        
-    except zipfile.BadZipFile:
-        logger.error(f"Invalid zip file: {original_filename}")
-        raise HTTPException(status_code=400, detail=f"Invalid zip file: {original_filename}")
-    except Exception as e:
-        logger.error(f"Error extracting zip file {original_filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error extracting zip file: {str(e)}")
-
-
-def is_zip_file(filename: str, content: bytes) -> bool:
-    """Check if a file is a zip archive by extension and magic bytes."""
-    if not filename:
-        return False
-    
-    # Check by extension
-    is_zip_ext = filename.lower().endswith('.zip')
-    
-    # Check by magic bytes
-    is_zip_magic = content.startswith(b'PK\x03\x04') or content.startswith(b'PK\x05\x06') or content.startswith(b'PK\x07\x08')
-    
-    return is_zip_ext or is_zip_magic
-
-
 @app.post("/upload")
 async def upload_files(
     files: List[UploadFile] = File(...),
@@ -232,7 +187,6 @@ async def upload_files(
         raise HTTPException(status_code=400, detail="No files provided")
 
     client = minio_client()
-    orthanc_client = get_orthanc_client() if ORTHANC_ENABLED else None
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     folder = f"study-{ts}"
 
@@ -243,115 +197,61 @@ async def upload_files(
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Storage unavailable: cannot access bucket '{MINIO_BUCKET}' at {MINIO_ENDPOINT}: {e}")
 
-    # Check Orthanc availability if enabled
-    orthanc_available = False
-    if orthanc_client and ORTHANC_ENABLED:
-        orthanc_available = orthanc_client.is_available()
-        if not orthanc_available:
-            logger.warning("Orthanc server is not available, DICOM files will be stored in MinIO only")
-
-    # Process all files (including extraction from zip files)
-    all_files_to_process = []
-    
-    for f in files:
-        # Read file data once
-        file_content = await f.read()
-        
-        try:
-            # Check if this is a zip file
-            if is_zip_file(f.filename, file_content):
-                logger.info(f"Processing zip file: {f.filename}")
-                # Extract files from zip
-                extracted_files = extract_files_from_zip(file_content, f.filename)
-                
-                for extracted_filename, extracted_content in extracted_files:
-                    all_files_to_process.append({
-                        'filename': extracted_filename,
-                        'content': extracted_content,
-                        'original_source': f"zip:{f.filename}",
-                        'content_type': 'application/octet-stream'  # Will be determined later based on content
-                    })
-            else:
-                # Regular file
-                all_files_to_process.append({
-                    'filename': f.filename,
-                    'content': file_content,
-                    'original_source': 'direct_upload',
-                    'content_type': f.content_type or 'application/octet-stream'
-                })
-        finally:
-            await f.close()
-
-    if not all_files_to_process:
-        raise HTTPException(status_code=400, detail="No valid files found to process")
-
-    # Now process all files (extracted and direct)
+    # Save files under a common prefix (folder/filename) and process DICOM files
     count = 0
     object_keys = []
-    dicom_instances = []
-    zip_extractions = []
+    orthanc_client = get_orthanc_client()
+    dicom_processed = 0
+    dicom_files = []  # Track DICOM files for 2D-3D conversion
     
-    for file_info in all_files_to_process:
-        filename = file_info['filename']
-        file_content = file_info['content']
-        original_source = file_info['original_source']
-        content_type = file_info['content_type']
+    for f in files:
+        # Read file data first
+        file_data = await f.read()
+        await f.seek(0)  # Reset for MinIO upload
         
         try:
-            # Check if this is a DICOM file
-            is_dicom, dicom_info = is_dicom_file(file_content, filename)
-            
-            if is_dicom and orthanc_available:
-                # Upload to Orthanc if it's a DICOM file and Orthanc is available
-                metadata = {
-                    'study_folder': folder,
-                    'uploaded_by': username or 'system',
-                    'original_source': original_source
-                }
-                
-                instance_id = orthanc_client.upload_dicom(file_content, metadata)
-                if instance_id:
-                    dicom_instances.append({
-                        'filename': filename,
-                        'instance_id': instance_id,
-                        'dicom_info': dicom_info,
-                        'original_source': original_source
-                    })
-                    logger.info(f"DICOM file {filename} uploaded to Orthanc with instance ID: {instance_id}")
-                else:
-                    logger.warning(f"Failed to upload DICOM file {filename} to Orthanc, storing in MinIO")
-            
-            # Always store in MinIO as well for consistency with existing workflow
-            key = f"{folder}/{filename}"
-            # Create a new BytesIO object from the content
-            file_stream = io.BytesIO(file_content)
-            
-            # Determine content type for DICOM files
-            if is_dicom:
-                content_type = "application/dicom"
-            
+            key = f"{folder}/{f.filename}"
+            # Upload to MinIO
             client.put_object(
                 MINIO_BUCKET,
                 key,
-                data=file_stream,
-                length=len(file_content),
-                content_type=content_type,
+                data=io.BytesIO(file_data),
+                length=len(file_data),
+                content_type=f.content_type or "application/octet-stream",
             )
             count += 1
             object_keys.append(key)
             
-            # Track zip extractions for metadata
-            if original_source.startswith('zip:'):
-                zip_source = original_source.replace('zip:', '')
-                zip_extractions.append({
-                    'zip_file': zip_source,
-                    'extracted_file': filename,
-                    'is_dicom': is_dicom
-                })
+            # Check if it's a DICOM file (returns tuple: (is_dicom, info))
+            is_dicom, dicom_info = is_dicom_file(file_data, f.filename)
+            if is_dicom:
+                dicom_files.append(key)
+                dicom_processed += 1
+                logger.info(f"Detected DICOM file: {f.filename} (size: {len(file_data)} bytes)")
+                
+                # Upload to Orthanc if available
+                if orthanc_client and orthanc_client.is_available():
+                    try:
+                        # Pass the file_data bytes directly (already in memory)
+                        instance_id = orthanc_client.upload_dicom(
+                            file_data,  # file_data is bytes object, safe to reuse
+                            metadata={
+                                "folder_id": folder,
+                                "uploaded_by": username,
+                                "study_id": folder
+                            }
+                        )
+                        if instance_id:
+                            logger.info(f"DICOM file {f.filename} uploaded to Orthanc with instance ID: {instance_id}")
+                        else:
+                            logger.error(f"Failed to get instance ID for {f.filename}")
+                    except Exception as e:
+                        logger.warning(f"Failed to upload DICOM file {f.filename} to Orthanc: {e}")
             
         except Exception as e:
-            logger.error(f"Error processing file {filename}: {e}")
             raise HTTPException(status_code=503, detail=f"Storage unavailable during upload: {e}")
+        finally:
+            await f.close()
 
     # Write metadata file for the folder
     meta = {
@@ -363,12 +263,6 @@ async def upload_files(
         "last_updated": now_iso(),
         "processing_by": None,
         "completed_by": None,
-        "dicom_instances": dicom_instances,  # Include DICOM information
-        "orthanc_available": orthanc_available,
-        "total_files": count,
-        "dicom_files": len(dicom_instances),
-        "zip_extractions": zip_extractions,  # Track which files came from zip archives
-        "processing_notes": f"Processed {len(all_files_to_process)} files from {len(files)} uploaded files"
     }
     try:
         put_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json", json.dumps(meta))
@@ -394,12 +288,63 @@ async def upload_files(
     except Exception as e:
         logging.getLogger("atrofiq").warning("DB insert failed for folder %s: %s", folder, e)
 
-    # Auto-start processing if age and gender are provided AND no DICOM files are present
-    # DICOM files require different processing pipeline (not NIfTI-based MRI inference)
+    # If DICOM files detected, convert to NIfTI first
     task_id = None
-    skip_auto_processing = len(dicom_instances) > 0
+    nifti_file_generated = None
     
-    if age and gender and not skip_auto_processing:
+    if dicom_files and age and gender:
+        logger.info(f"Found {len(dicom_files)} DICOM files, converting to NIfTI...")
+        try:
+            # Call 2D-3D conversion directly (synchronous)
+            from .tasks.mri_processing_v2 import call_2d3d_conversion
+            import tempfile
+            
+            # Create temp directory and download DICOM files
+            temp_dir = tempfile.mkdtemp(prefix="dicom_upload_")
+            try:
+                # Download all DICOM files
+                for dicom_key in dicom_files:
+                    filename = os.path.basename(dicom_key)
+                    local_path = os.path.join(temp_dir, filename)
+                    client.fget_object(MINIO_BUCKET, dicom_key, local_path)
+                
+                # Convert DICOM to NIfTI
+                logger.info(f"Converting {len(dicom_files)} DICOM slices to NIfTI...")
+                conversion_result = call_2d3d_conversion(temp_dir, folder_name=folder)
+                
+                if conversion_result.get('success'):
+                    # Upload generated NIfTI to MinIO
+                    output_nifti_path = conversion_result.get('output_3d_file')
+                    if output_nifti_path and os.path.exists(output_nifti_path):
+                        nifti_key = f"{folder}/converted_from_dicom.nii.gz"
+                        client.fput_object(MINIO_BUCKET, nifti_key, output_nifti_path)
+                        logger.info(f"Uploaded converted NIfTI to MinIO: {nifti_key}")
+                        object_keys.append(nifti_key)
+                        nifti_file_generated = nifti_key
+                        
+                        # Update metadata
+                        meta["has_dicom_conversion"] = True
+                        meta["nifti_file"] = nifti_key
+                        meta["num_dicom_slices"] = len(dicom_files)
+                        put_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json", json.dumps(meta))
+                    else:
+                        logger.error("2D-3D conversion succeeded but no output file found")
+                else:
+                    error_msg = conversion_result.get('error', 'Unknown error')
+                    logger.error(f"2D-3D conversion failed: {error_msg}")
+                    
+            finally:
+                # Clean up temp directory
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    
+        except Exception as e:
+            logger.error(f"Failed to convert DICOM to NIfTI: {e}", exc_info=True)
+    
+    # Auto-start processing if age and gender are provided
+    # For DICOM: process the generated NIfTI file
+    # For direct NIfTI upload: process normally
+    if age and gender:
         try:
             task = run_mri_inference.delay(
                 study_folder=folder,
@@ -427,7 +372,8 @@ async def upload_files(
                                 input_params={
                                     "age": age,
                                     "gender": gender,
-                                    "username": username or "system"
+                                    "username": username or "system",
+                                    "from_dicom": len(dicom_files) > 0
                                 }
                             )
                             s.add(task_record)
@@ -437,262 +383,17 @@ async def upload_files(
             
         except Exception as e:
             logger.error(f"Failed to auto-start processing for {folder}: {e}")
-    elif skip_auto_processing:
-        logger.info(f"Skipping auto-processing for {folder} - contains DICOM files which require different processing pipeline")
 
     return {
         "ok": True, 
         "folder": folder, 
         "files_count": count, 
+        "dicom_files_processed": dicom_processed,
+        "nifti_generated": nifti_file_generated is not None,
+        "nifti_file": nifti_file_generated,
         "task_id": task_id, 
-        "auto_processing_started": task_id is not None,
-        "auto_processing_skipped": skip_auto_processing,
-        "auto_processing_skip_reason": "DICOM files detected - requires different processing pipeline" if skip_auto_processing else None,
-        "dicom_files": len(dicom_instances),
-        "dicom_instances": dicom_instances,
-        "orthanc_available": orthanc_available,
-        "zip_extractions": zip_extractions,
-        "total_uploaded_files": len(files),
-        "total_processed_files": len(all_files_to_process)
+        "auto_processing_started": task_id is not None
     }
-
-
-@app.get("/orthanc/status")
-def orthanc_status():
-    """Get Orthanc server status and configuration."""
-    if not ORTHANC_ENABLED:
-        return {"enabled": False, "message": "Orthanc integration disabled"}
-    
-    orthanc_client = get_orthanc_client()
-    if not orthanc_client:
-        return {"enabled": True, "available": False, "message": "Orthanc not configured"}
-    
-    available = orthanc_client.is_available()
-    return {
-        "enabled": True,
-        "available": available,
-        "endpoint": ORTHANC_ENDPOINT,
-        "message": "Orthanc server is reachable" if available else "Orthanc server is not reachable"
-    }
-
-
-@app.get("/orthanc/studies")
-def list_orthanc_studies():
-    """List all studies stored in Orthanc."""
-    if not ORTHANC_ENABLED:
-        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
-    
-    orthanc_client = get_orthanc_client()
-    if not orthanc_client or not orthanc_client.is_available():
-        raise HTTPException(status_code=503, detail="Orthanc server not available")
-    
-    try:
-        response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies")
-        if response.status_code == 200:
-            studies = response.json()
-            study_details = []
-            
-            for study_id in studies:
-                study_response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies/{study_id}")
-                if study_response.status_code == 200:
-                    study_info = study_response.json()
-                    study_details.append({
-                        'id': study_id,
-                        'patient_id': study_info.get('PatientMainDicomTags', {}).get('PatientID'),
-                        'patient_name': study_info.get('PatientMainDicomTags', {}).get('PatientName'),
-                        'study_date': study_info.get('MainDicomTags', {}).get('StudyDate'),
-                        'study_description': study_info.get('MainDicomTags', {}).get('StudyDescription'),
-                        'study_instance_uid': study_info.get('MainDicomTags', {}).get('StudyInstanceUID'),
-                        'series_count': len(study_info.get('Series', [])),
-                        'instances_count': sum(len(series.get('Instances', [])) for series in study_info.get('Series', []))
-                    })
-            
-            return {"studies": study_details}
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Failed to fetch studies from Orthanc")
-            
-    except Exception as e:
-        logger.error(f"Error fetching studies from Orthanc: {e}")
-        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
-
-
-@app.get("/orthanc/studies/{study_id}")
-def get_orthanc_study_details(study_id: str):
-    """Get detailed information about a specific DICOM study including series and instances."""
-    if not ORTHANC_ENABLED:
-        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
-    
-    orthanc_client = get_orthanc_client()
-    if not orthanc_client or not orthanc_client.is_available():
-        raise HTTPException(status_code=503, detail="Orthanc server not available")
-    
-    try:
-        study_response = orthanc_client.session.get(f"{orthanc_client.base_url}/studies/{study_id}")
-        if study_response.status_code == 200:
-            study_info = study_response.json()
-            
-            # Get detailed series information
-            series_details = []
-            for series_id in study_info.get('Series', []):
-                series_response = orthanc_client.session.get(f"{orthanc_client.base_url}/series/{series_id}")
-                if series_response.status_code == 200:
-                    series_info = series_response.json()
-                    series_details.append({
-                        'id': series_id,
-                        'series_description': series_info.get('MainDicomTags', {}).get('SeriesDescription'),
-                        'modality': series_info.get('MainDicomTags', {}).get('Modality'),
-                        'series_number': series_info.get('MainDicomTags', {}).get('SeriesNumber'),
-                        'instances': series_info.get('Instances', []),
-                        'instances_count': len(series_info.get('Instances', []))
-                    })
-            
-            return {
-                'id': study_id,
-                'patient_id': study_info.get('PatientMainDicomTags', {}).get('PatientID'),
-                'patient_name': study_info.get('PatientMainDicomTags', {}).get('PatientName'),
-                'study_date': study_info.get('MainDicomTags', {}).get('StudyDate'),
-                'study_time': study_info.get('MainDicomTags', {}).get('StudyTime'),
-                'study_description': study_info.get('MainDicomTags', {}).get('StudyDescription'),
-                'study_instance_uid': study_info.get('MainDicomTags', {}).get('StudyInstanceUID'),
-                'accession_number': study_info.get('MainDicomTags', {}).get('AccessionNumber'),
-                'series': series_details,
-                'series_count': len(series_details),
-                'instances_count': sum(len(series.get('Instances', [])) for series in series_details)
-            }
-        elif study_response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Study not found")
-        else:
-            raise HTTPException(status_code=study_response.status_code, detail="Failed to fetch study from Orthanc")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching study {study_id} from Orthanc: {e}")
-        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
-
-
-@app.get("/orthanc/instances/{instance_id}/file")
-def download_dicom_instance(instance_id: str):
-    """Download a DICOM instance file."""
-    if not ORTHANC_ENABLED:
-        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
-    
-    orthanc_client = get_orthanc_client()
-    if not orthanc_client or not orthanc_client.is_available():
-        raise HTTPException(status_code=503, detail="Orthanc server not available")
-    
-    try:
-        # Get instance info first to get filename
-        instance_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}")
-        if instance_response.status_code != 200:
-            raise HTTPException(status_code=404, detail="Instance not found")
-            
-        instance_info = instance_response.json()
-        sop_instance_uid = instance_info.get('MainDicomTags', {}).get('SOPInstanceUID', instance_id)
-        
-        # Download the DICOM file
-        file_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}/file")
-        if file_response.status_code == 200:
-            from fastapi.responses import Response
-            return Response(
-                content=file_response.content,
-                media_type="application/dicom",
-                headers={
-                    "Content-Disposition": f"attachment; filename={sop_instance_uid}.dcm"
-                }
-            )
-        elif file_response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Instance file not found")
-        else:
-            raise HTTPException(status_code=file_response.status_code, detail="Failed to download instance from Orthanc")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error downloading instance {instance_id} from Orthanc: {e}")
-        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
-
-
-@app.get("/orthanc/instances/{instance_id}/preview")
-def get_dicom_instance_preview(instance_id: str):
-    """Get a preview image (PNG) of a DICOM instance."""
-    if not ORTHANC_ENABLED:
-        raise HTTPException(status_code=404, detail="Orthanc integration disabled")
-    
-    orthanc_client = get_orthanc_client()
-    if not orthanc_client or not orthanc_client.is_available():
-        raise HTTPException(status_code=503, detail="Orthanc server not available")
-    
-    try:
-        # Try to get the preview image
-        preview_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}/preview")
-        if preview_response.status_code == 200:
-            from fastapi.responses import Response
-            return Response(
-                content=preview_response.content,
-                media_type="image/png"
-            )
-        elif preview_response.status_code == 404:
-            raise HTTPException(status_code=404, detail="Instance or preview not found")
-        else:
-            raise HTTPException(status_code=preview_response.status_code, detail="Failed to get preview from Orthanc")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting preview for instance {instance_id} from Orthanc: {e}")
-        raise HTTPException(status_code=503, detail=f"Error communicating with Orthanc: {str(e)}")
-
-
-@app.get("/folders/{folder}/dicom-studies")
-def get_folder_dicom_studies(folder: str):
-    """Get DICOM studies associated with a specific folder."""
-    client = minio_client()
-    
-    # Get folder metadata
-    meta_text = get_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json")
-    if not meta_text:
-        raise HTTPException(status_code=404, detail="Folder not found")
-    
-    try:
-        meta = json.loads(meta_text)
-        dicom_instances = meta.get('dicom_instances', [])
-        
-        if not dicom_instances:
-            return {"folder": folder, "dicom_instances": [], "message": "No DICOM files in this folder"}
-        
-        # If Orthanc is available, fetch current information
-        if ORTHANC_ENABLED:
-            orthanc_client = get_orthanc_client()
-            if orthanc_client and orthanc_client.is_available():
-                # Update DICOM instance information with current Orthanc data
-                for instance in dicom_instances:
-                    instance_id = instance.get('instance_id')
-                    if instance_id:
-                        try:
-                            instance_response = orthanc_client.session.get(f"{orthanc_client.base_url}/instances/{instance_id}")
-                            if instance_response.status_code == 200:
-                                instance_info = instance_response.json()
-                                instance['current_status'] = 'available'
-                                instance['tags'] = instance_info.get('MainDicomTags', {})
-                            else:
-                                instance['current_status'] = 'not_found'
-                        except Exception:
-                            instance['current_status'] = 'error'
-                    else:
-                        instance['current_status'] = 'no_instance_id'
-        
-        return {
-            "folder": folder,
-            "dicom_instances": dicom_instances,
-            "orthanc_available": ORTHANC_ENABLED and orthanc_client and orthanc_client.is_available() if ORTHANC_ENABLED else False
-        }
-        
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Invalid folder metadata")
-    except Exception as e:
-        logger.error(f"Error getting DICOM studies for folder {folder}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving DICOM studies: {str(e)}")
 
 
 @app.get("/folders/")
@@ -933,6 +634,11 @@ def get_study_results(folder: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/test-2d3d")
+def test_2d3d_endpoint():
+    """Test endpoint to verify 2D-3D route registration"""
+    return {"message": "2D-3D endpoint is registered", "available": True}
 
 
 @app.delete("/study/{folder}")
@@ -1213,6 +919,150 @@ def presign_nifti_url_query(
 def open_visualizer():
     subprocess.Popen(['python3', 'visualizer.py'])
     return 'Visualizer launched', 200
+
+@app.post("/convert-2d-3d/{folder}")
+def trigger_2d3d_conversion(folder: str):
+    """
+    Trigger 2D-3D conversion for DICOM slices in a folder.
+    Collects all DICOM slices, converts to NIfTI, then processes through pipeline.
+    """
+    logger.info(f"2D-3D conversion triggered for folder: {folder}")
+    
+    try:
+        from .tasks.mri_processing_v2 import call_2d3d_conversion
+        import tempfile
+        import os
+        import shutil
+        
+        client = minio_client()
+        
+        # Collect ALL DICOM files from the folder
+        objects = client.list_objects(MINIO_BUCKET, prefix=folder, recursive=True)
+        dicom_files = []
+        
+        for obj in objects:
+            obj_lower = obj.object_name.lower()
+            if obj_lower.endswith(('.dcm', '.dicom')):
+                dicom_files.append(obj.object_name)
+        
+        if not dicom_files:
+            error_msg = f"No DICOM files found in folder: {folder}"
+            logger.error(error_msg)
+            raise HTTPException(status_code=404, detail=error_msg)
+        
+        logger.info(f"Found {len(dicom_files)} DICOM slices in {folder}")
+        
+        # Create temporary directory for DICOM slices
+        temp_dir = tempfile.mkdtemp(prefix="dicom_slices_")
+        
+        try:
+            # Download all DICOM slices to temp directory
+            logger.info(f"Downloading {len(dicom_files)} DICOM slices to {temp_dir}")
+            for dicom_file in dicom_files:
+                filename = os.path.basename(dicom_file)
+                local_path = os.path.join(temp_dir, filename)
+                client.fget_object(MINIO_BUCKET, dicom_file, local_path)
+                logger.info(f"Downloaded: {filename}")
+            
+            # Call 2D-3D conversion with the directory containing all slices
+            logger.info(f"Starting 2D-3D conversion for {len(dicom_files)} slices...")
+            result = call_2d3d_conversion(temp_dir, folder_name=folder)
+            
+            if not result.get('success'):
+                error_msg = result.get('error', 'Unknown error during 2D-3D conversion')
+                logger.error(f"2D-3D conversion failed: {error_msg}")
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            logger.info(f"2D-3D conversion successful: {result.get('output_nifti_path', 'N/A')}")
+            
+            # Upload generated NIfTI back to MinIO
+            output_nifti_path = result.get('output_nifti_path')
+            if output_nifti_path and os.path.exists(output_nifti_path):
+                nifti_key = f"{folder}/converted_3d.nii.gz"
+                logger.info(f"Uploading generated NIfTI to MinIO: {nifti_key}")
+                client.fput_object(MINIO_BUCKET, nifti_key, output_nifti_path)
+                result['minio_path'] = nifti_key
+            
+            # Update metadata
+            meta_text = get_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json")
+            meta = {}
+            if meta_text:
+                try:
+                    meta = json.loads(meta_text)
+                except Exception:
+                    pass
+            
+            meta.update({
+                "volume_2d3d": result,
+                "last_updated": now_iso(),
+                "has_2d3d_conversion": True,
+                "nifti_file": nifti_key if 'minio_path' in result else None,
+                "num_input_slices": len(dicom_files)
+            })
+            
+            put_text_object(client, MINIO_BUCKET, f"{folder}/_meta.json", json.dumps(meta))
+            
+            # Trigger normative modeling and brain age prediction on the generated NIfTI
+            if result.get('minio_path'):
+                logger.info("Triggering analysis pipeline for generated NIfTI...")
+                try:
+                    from .tasks.mri_processing_v2 import process_nifti_with_mrbrain_final
+                    task = process_nifti_with_mrbrain_final.delay(folder, result['minio_path'])
+                    result['analysis_task_id'] = task.id
+                    logger.info(f"Started analysis task: {task.id}")
+                except Exception as e:
+                    logger.error(f"Failed to start analysis task: {e}")
+            
+            return result
+            
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temp directory: {temp_dir}")
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"2D-3D conversion failed for {folder}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"2D-3D conversion error: {str(e)}")
+
+@app.get("/volumes/slice/{slice_id}")
+def get_volume_slice(slice_id: int):
+    """Serve volume slice images (mock endpoint for development)."""
+    if not IMAGE_PROCESSING_AVAILABLE:
+        raise HTTPException(status_code=501, detail="Image processing not available - PIL/numpy not installed")
+    
+    from fastapi.responses import Response
+    
+    # Create a mock brain slice image
+    size = 256
+    image_data = np.zeros((size, size), dtype=np.uint8)
+    
+    # Create a simple brain-like pattern
+    center = size // 2
+    for y in range(size):
+        for x in range(size):
+            dx = x - center
+            dy = y - center
+            r = np.sqrt(dx*dx + dy*dy)
+            
+            # Create brain-like structure with some variation per slice
+            if r < size * 0.4:
+                noise = np.random.random() * 0.3
+                slice_variation = np.sin(slice_id / 30.0) * 0.2
+                intensity = max(0, min(255, 180 + slice_variation * 75 + noise * 50))
+                image_data[y, x] = intensity
+    
+    # Convert to PIL Image
+    img = Image.fromarray(image_data, mode='L')
+    
+    # Save to bytes
+    img_buffer = io.BytesIO()
+    img.save(img_buffer, format='PNG')
+    img_buffer.seek(0)
+    
+    return Response(content=img_buffer.getvalue(), media_type="image/png")
 
 @app.get("/verify_storage")
 def verify_storage():

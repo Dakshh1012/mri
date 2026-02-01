@@ -90,6 +90,7 @@ export default function Worklist() {
 
   // Upload
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
   // CRA env var for upload endpoint (defaults to 'upload')
   const uploadEndpoint = (process.env.REACT_APP_UPLOAD_ENDPOINT || 'upload').replace(/^\/+|\/+$/g, '');
@@ -305,14 +306,24 @@ export default function Worklist() {
       return;
     }
     
-    // If Available but no metadata, show error
+    // Check metadata for brain age and normative modeling
     const meta = entry._raw || {};
     let age = meta.age || entry?.Age;
     let gender = meta.gender || entry?.Gender;
     
+    // For DICOM files, allow processing even without metadata (for 2D-3D conversion)
+    const isDicomFile = entry._raw?.dicom_object || entry._raw?.has_dicom;
+    
     if (!age || !gender) {
-      setError(`Cannot process: Missing required metadata (age=${age}, gender=${gender}). Please re-upload with complete metadata.`);
-      return;
+      if (isDicomFile) {
+        // Allow processing DICOM files for 2D-3D conversion even without complete metadata
+        console.log('Processing DICOM file for 2D-3D conversion without complete metadata');
+        age = age || 'unknown';
+        gender = gender || 'unknown';
+      } else {
+        setError(`Cannot process: Missing required metadata (age=${age}, gender=${gender}). Please re-upload with complete metadata.`);
+        return;
+      }
     }
     
     // If Available with metadata, start processing manually (fallback)
@@ -491,6 +502,17 @@ export default function Worklist() {
     setError('');
     setSelectedFiles(Array.from(e.target.files || []));
   };
+  
+  const resetFileInputs = () => {
+    // Reset all file input elements
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    if (folderInputRef.current) {
+      folderInputRef.current.value = '';
+    }
+  };
+  
   const processSelectedFile = async () => {
     if (!selectedFiles.length) return;
     setIsLoading(true);
@@ -508,6 +530,7 @@ export default function Worklist() {
       });
 
       setSelectedFiles([]);
+      resetFileInputs(); // Reset file input elements
       // Refresh worklist after successful upload
       await fetchFolders();
     } catch (e) {
@@ -532,8 +555,8 @@ export default function Worklist() {
             <Folder className="w-4 h-4" />
             Upload Folder
           </label>
-          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz,.zip" onChange={onFileSelected} style={{ display: 'none' }} />
-          <input id="folderUpload" type="file" webkitdirectory="" multiple onChange={onFileSelected} style={{ display: 'none' }} />
+          <input id="dicomUpload" ref={fileInputRef} type="file" multiple accept=".dcm,.dicom,.nii,.nii.gz,.gz" onChange={onFileSelected} style={{ display: 'none' }} />
+          <input id="folderUpload" ref={folderInputRef} type="file" webkitdirectory="" multiple onChange={onFileSelected} style={{ display: 'none' }} />
           <div className="inline-field">
             <label htmlFor="age">Age</label>
             <input
@@ -720,6 +743,7 @@ export default function Worklist() {
                         <button className="btn btn-ghost btn-sm inline-flex items-center gap-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-red-400" onClick={() => deleteStudy(entry)} title="Delete from worklist">
                           <Trash2 className="w-4 h-4" />
                         </button>
+                        
                         <button
                           onClick={() => handleAnnotateClick(entry)}
                           disabled={annotatingId === entry.id}

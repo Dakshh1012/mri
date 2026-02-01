@@ -13,17 +13,15 @@ celery_app = Celery(
     'atrofiq',
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=[
-        'app.tasks.mri_processing',  # Our main processing tasks
-    ]
 )
 
 # Celery configuration
 celery_app.conf.update(
-    # Task routing
-    task_routes={
-        'app.tasks.mri_processing.*': {'queue': 'mri_processing'},
-    },
+    # Task routing - REMOVED to use default queue
+    # task_routes={
+    #     'app.tasks.mri_processing.*': {'queue': 'mri_processing'},
+    #     'mri_processing.*': {'queue': 'mri_processing'},
+    # },
     
     # Task serialization
     task_serializer='json',
@@ -76,3 +74,11 @@ def get_celery_db_session():
         raise
     finally:
         session.close()
+
+# Force import of tasks to ensure they are registered
+# This must be done AFTER celery_app is created to avoid circular imports
+try:
+    from .tasks import mri_processing, mri_processing_v2
+    print(f"✓ Celery tasks imported successfully")
+except Exception as e:
+    print(f"⚠ Warning: Failed to import tasks: {e}")

@@ -92,10 +92,13 @@ services:
       - ORTHANC_ENDPOINT=orthanc:8042
       - ORTHANC_USERNAME=orthanc
       - ORTHANC_PASSWORD=orthanc
+      - MRBRAIN_FINAL_PATH=/app/MRBrain_final
+      - MRBRAIN_API_URL=http://mrbrain-api:8000
     ports:
       - "7000:7000"
     volumes:
       - ./backend:/app
+      - ./MRBrain_final:/app/MRBrain_final
       - ./MRBrain:/app/MRBrain
     depends_on:
       - postgres
@@ -129,8 +132,11 @@ services:
       - ORTHANC_ENDPOINT=orthanc:8042
       - ORTHANC_USERNAME=orthanc
       - ORTHANC_PASSWORD=orthanc
+      - MRBRAIN_FINAL_PATH=/app/MRBrain_final
+      - MRBRAIN_API_URL=http://mrbrain-api:8000
     volumes:
       - ./backend:/app
+      - ./MRBrain_final:/app/MRBrain_final
       - ./MRBrain:/app/MRBrain
     depends_on:
       - postgres
@@ -163,13 +169,19 @@ services:
   # MRBrain Inference API
   mrbrain-api:
     build:
-      context: ./MRBrain
+      context: ./MRBrain_final
       dockerfile: Dockerfile
     container_name: atrofiq_mrbrain
+    environment:
+      - MRBRAIN_FINAL_PATH=/app
+      - MRBRAIN_API_HOST=0.0.0.0
+      - MRBRAIN_API_PORT=8000
+      - LOG_LEVEL=INFO
+      - TEMP_DIR=/tmp
     ports:
       - "8000:8000"
     volumes:
-      - ./MRBrain:/app
+      - ./MRBrain_final:/app
     networks:
       - atrofiq_network
     restart: unless-stopped

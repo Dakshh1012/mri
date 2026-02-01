@@ -54,7 +54,15 @@ class OrthancClient:
             Instance ID if successful, None otherwise
         """
         try:
-            # Upload DICOM file
+            # Log file size being uploaded
+            logger.info(f"Uploading DICOM to Orthanc, size: {len(dicom_data)} bytes, type: {type(dicom_data)}")
+            
+            # Ensure we're passing bytes directly (not a file-like object)
+            if not isinstance(dicom_data, bytes):
+                logger.error(f"Invalid dicom_data type: {type(dicom_data)}, expected bytes")
+                return None
+            
+            # Upload DICOM file - use files parameter instead of data for binary content
             response = self.session.post(
                 f"{self.base_url}/instances",
                 data=dicom_data,
@@ -155,11 +163,12 @@ def is_dicom_file(file_data: bytes, filename: str = None) -> Tuple[bool, Optiona
             return False, None
             
         finally:
-            # Clean up temp file
+            # Clean up temp file securely
             try:
-                os.unlink(temp_path)
-            except:
-                pass
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp file {temp_path}: {cleanup_error}")
                 
     except Exception as e:
         logger.error(f"Error checking if file is DICOM: {e}")

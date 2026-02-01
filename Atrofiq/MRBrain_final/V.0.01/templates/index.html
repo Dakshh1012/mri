@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AtrofIQ | Premium Analysis</title>
+
+    <!-- Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Styles -->
+    <link href="/static/css/style.css?v=1.1" rel="stylesheet">
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="brand">
+            <i class="fa-solid fa-brain-circuit"></i>
+            <span>ATROF<span style="color:var(--accent-primary)">IQ</span></span>
+        </div>
+
+        <div class="status-badge" id="status-indicator">
+            <div class="status-dot"></div>
+            SYSTEM ACTIVE
+        </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="app-container">
+
+        <!-- Panel 1: Intake -->
+        <aside class="panel">
+            <div class="panel-header">
+                <span>Data Intake</span>
+                <i class="fa-solid fa-server"></i>
+            </div>
+
+            <div class="panel-body">
+                <!-- Dropzone -->
+                <div class="upload-zone" id="dropzone">
+                    <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
+                    <div>
+                        <strong style="display:block; margin-bottom:0.25rem;">UPLOAD DICOM</strong>
+                        <small>Drag folder or Click</small>
+                    </div>
+                    <input type="file" id="fileInput" name="files[]" webkitdirectory directory multiple
+                        style="display:none;">
+                </div>
+
+                <div class="file-list" id="file-list"></div>
+
+                <hr style="border:0; border-top:1px solid var(--border-glass);">
+
+                <!-- Controls -->
+                <div class="row-group">
+                    <div class="form-group">
+                        <label class="form-label">Age</label>
+                        <input type="number" id="input-age" class="form-control" value="65" step="0.5">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Sex</label>
+                        <select id="input-sex" class="form-control">
+                            <option value="Female">Female</option>
+                            <option value="Male">Male</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" id="force-contrast"> Force Post-Contrast
+                    </label>
+                </div>
+
+                <button id="btn-analyze" class="btn-main" disabled>
+                    <i class="fa-solid fa-bolt"></i> RUN ANALYSIS
+                </button>
+
+                <!-- Terminal -->
+                <div class="terminal" id="log-terminal">
+                    > System Initialized...
+                </div>
+
+                <div class="progress-bar-container hidden" id="progress-area"
+                    style="background:var(--bg-input); border-radius:99px; height:6px; overflow:hidden;">
+                    <div id="progress-bar"
+                        style="height:100%; width:0%; background:var(--accent-primary); transition:width 0.3s;"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Panel 2: Viewer -->
+        <section class="panel">
+            <div class="panel-header">
+                <span>Axial Viewer [RAS]</span>
+                <div style="display:flex; gap:0.5rem;">
+                    <i class="fa-solid fa-expand tools-icon"></i>
+                </div>
+            </div>
+            <div class="panel-body" style="padding:0;">
+                <div class="viewer-container" id="slice-view">
+                    <div class="viewer-placeholder" id="viewer-placeholder">
+                        <i class="fa-solid fa-layer-group"></i>
+                        <span>NO VOLUME LOADED</span>
+                    </div>
+                    <img id="slice-axial" class="viewer-img" src="" alt="Axial Slice">
+
+                    <div class="viewer-tools">
+                        <i class="fa-solid fa-sliders tool-btn"></i>
+                        <i class="fa-solid fa-ruler-combined tool-btn"></i>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Panel 3: Analytics -->
+        <aside class="panel">
+            <div class="panel-header">
+                <span>Biomarkers</span>
+                <i class="fa-solid fa-chart-pie"></i>
+            </div>
+
+            <div class="panel-body">
+                <!-- Brain Age -->
+                <h4 style="color:var(--text-main); font-size:0.9rem;">Brain Age Prediction</h4>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">Predicted Age</div>
+                        <div class="metric-value highlight" id="res-pred-age">--</div>
+                        <div class="metric-sub">Years</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">GAP (BAG)</div>
+                        <div class="metric-value" id="res-bag">--</div>
+                        <div class="metric-sub">Years</div>
+                    </div>
+                </div>
+
+                <div
+                    style="background:rgba(239, 68, 68, 0.1); color:var(--accent-danger); padding:0.5rem; border-radius:var(--radius-md); font-size:0.75rem; display:flex; gap:0.5rem; align-items:center;">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <span>Model Uncertainty: ± 4.21 Years MAE</span>
+                </div>
+
+                <hr style="border:0; border-top:1px solid var(--border-glass);">
+
+                <!-- Normative -->
+                <h4 style="color:var(--text-main); font-size:0.9rem;">Normative Curves</h4>
+                <select id="region-select" class="form-control" style="font-size:0.85rem;">
+                    <option>Select Region...</option>
+                </select>
+
+                <div class="chart-box">
+                    <canvas id="normative-chart"></canvas>
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <script src="/static/js/main.js?v=2.0"></script>
+</body>
+
+</html>

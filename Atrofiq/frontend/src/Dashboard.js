@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Scatter, ScatterChart, Legend } from 'recharts';
+import { API_BASE_URL } from './config';
 import './Dashboard.css';
 
 const Dashboard = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { analysisResults, patientAge, patientGender } = location.state || {};
   
   const [results, setResults] = useState(null);
@@ -17,17 +19,27 @@ const Dashboard = () => {
   const [customPoints, setCustomPoints] = useState([]);
   const [customAge, setCustomAge] = useState('');
   const [customVolume, setCustomVolume] = useState('');
+  
+  // 3D Visualizer state
+  const [visualizerLoading, setVisualizerLoading] = useState(false);
+  const [selectedStudy, setSelectedStudy] = useState('');
 
   // Update results when navigation state changes
   useEffect(() => {
     if (analysisResults) {
       console.log('Received analysis results:', analysisResults);
+      console.log('Analysis metadata:', analysisResults.metadata);
+      console.log('Brainâge data:', analysisResults.brainAge);
       console.log('Normative data structure:', analysisResults.normative);
       console.log('Normative percentile_scores:', analysisResults.normative?.percentile_scores);
       console.log('Normative volumetric_features:', analysisResults.normative?.volumetric_features);
       setResults(analysisResults);
       if (patientAge) setAge(patientAge.toString());
       if (patientGender) setGender(patientGender);
+      // Set selectedStudy from results metadata if available
+      if (analysisResults.metadata?.folder_name) {
+        setSelectedStudy(analysisResults.metadata.folder_name);
+      }
     }
   }, [analysisResults, patientAge, patientGender]);
 
@@ -174,6 +186,9 @@ const Dashboard = () => {
   const getBrainAgeGap = () => {
     if (!results?.brainAge) return null;
     
+    // Check if brain age was skipped
+    if (results.brainAge.status === 'skipped') return null;
+    
     // Try different possible response structures
     let predictedAge = null;
     if (results.brainAge.predicted_age !== undefined) {
@@ -193,6 +208,10 @@ const Dashboard = () => {
   };
 
   const getInterpretation = () => {
+    if (results?.brainAge?.status === 'skipped') {
+      return 'Brain age analysis skipped - missing demographic metadata. 2D-3D conversion results available below.';
+    }
+    
     const gap = getBrainAgeGap();
     if (gap === null || isNaN(gap)) return 'Brain age analysis pending - please check input data.';
     
@@ -232,6 +251,12 @@ const Dashboard = () => {
   };
 
   const getAvailableRegions = () => {
+    // Check if normative modeling was skipped
+    if (results?.normative?.status === 'skipped') {
+      console.log("Normative modeling was skipped");
+      return [];
+    }
+    
     // Prioritize regions that have actual percentile curves from API
     if (results?.normative?.percentile_curves && Object.keys(results.normative.percentile_curves).length > 0) {
       const curveRegions = Object.keys(results.normative.percentile_curves);
@@ -283,14 +308,101 @@ const Dashboard = () => {
   };
 
   const openVisualizer = async () => {
-  try {
-    await fetch('http://localhost:7000/open-visualizer', { method: 'POST' });
-    alert('Opening 3D Visualizer...');
-  } catch (err) {
-    console.error('Failed to open visualizer:', err);
-    alert('Error: Could not open visualizer.');
-  }
-};
+    try {
+      console.log('Opening visualizer with results:', results);
+      console.log('Results metadata:', results?.metadata);
+      
+      let volumeData = null;
+      let studyName = selectedStudy || results?.metadata?.folder_name || 'Brain Analysis';
+      
+      // Check if we have 2D-3D conversion results
+      if (results?.volume_2d3d?.success || results?.volume_2d3d?.visualization_file) {
+        console.log('Found 2D-3D conversion results, navigating to visualizer page');
+        volumeData = results.volume_2d3d;
+      } 
+      // Check if we have NIfTI files (already 3D)
+      else {
+        const hasNiftiFile = (
+          results?.metadata?.file_type?.includes('nii') ||
+          results?.metadata?.file_path?.includes('.nii') ||
+          results?.metadata?.original_filename?.includes('.nii') ||
+          results?.brainAge?.file_path?.includes('.nii') ||
+          results?.normative?.file_path?.includes('.nii') ||
+          JSON.stringify(results).toLowerCase().includes('.nii')
+        );
+        
+        console.log('NIfTI file detected:', hasNiftiFile);
+        
+        if (hasNiftiFile || (results && (results.brainAge || results.normative))) {
+          // Create volume data for NIfTI or analysis results
+          volumeData = {
+            success: true,
+            type: 'nifti_3d',
+            message: hasNiftiFile ? 'NIfTI 3D Volume Loaded' : 'Brain Analysis Results Ready',
+            input_file: results?.metadata?.file_path || results?.metadata?.original_filename || 'brain_volume.nii',
+            file_path: results?.metadata?.file_path || results?.metadata?.original_filename,
+            subject_id: results?.metadata?.patient_id || results?.metadata?.subject_id || 'Unknown'
+          };
+        }
+        
+        // For DICOM data without conversion results - try auto-conversion
+        if (results?.metadata?.has_dicom_data && !volumeData) {
+          let folderName = selectedStudy || results?.metadata?.folder_name;
+          
+          if (!folderName && results?.metadata?.file_path) {
+            folderName = results.metadata.file_path.split('/').pop().split('\\').pop();
+          }
+          
+          if (folderName) {
+            try {
+              setVisualizerLoading(true);
+              const response = await fetch(`${API_BASE_URL}/convert-2d-3d/${folderName}`, {
+                method: 'POST'
+              });
+              
+              if (response.ok) {
+                const conversionResult = await response.json();
+                if (conversionResult.success) {
+                  volumeData = conversionResult.volume_2d3d;
+                }
+              }
+            } catch (conversionError) {
+              console.error('2D-3D conversion error:', conversionError);
+            } finally {
+              setVisualizerLoading(false);
+            }
+          }
+        }
+      }
+      
+      // Navigate to the visualizer page
+      navigate('/visualizer', {
+        state: {
+          volumeData: volumeData,
+          analysisResults: results,
+          studyName: studyName
+        }
+      });
+      
+    } catch (err) {
+      console.error('Failed to open visualizer:', err);
+      alert('Failed to open 3D visualizer. Please try again.');
+    }
+  };
+  
+  const has3DVisualization = () => {
+    return results?.volume_2d3d?.success || results?.volume_2d3d?.visualization_file;
+  };
+  
+  const get3DViewerButtonText = () => {
+    if (results?.volume_2d3d?.success) {
+      return 'View 2D→3D Results';
+    }
+    if (results?.metadata?.has_2d3d_conversion) {
+      return 'View 3D Processing';
+    }
+    return 'Open 3D Viewer';
+  };
 
   const CustomScatterTooltip = ({ active, payload }) => {
     if (active && payload && payload.length) {
@@ -379,8 +491,46 @@ const Dashboard = () => {
                     </div>
                   </div>
                 </div>
-                <button className="viewer-btn" onClick={openVisualizer}>
-                  Open 3D Viewer
+                <button 
+                  className={`viewer-btn ${
+                    has3DVisualization() ? 'has-3d-data' : ''
+                  } ${
+                    results?.volume_2d3d?.success 
+                      ? 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700' 
+                      : visualizerLoading
+                      ? 'bg-gray-600 cursor-not-allowed'
+                      : 'bg-gray-700 hover:bg-gray-600'
+                  }`} 
+                  onClick={openVisualizer}
+                  disabled={visualizerLoading}
+                  title={results?.volume_2d3d?.success ? 'View 2D-3D conversion results with interactive 3D viewer' : 'Open 3D viewer'}
+                >
+                  <span className="flex items-center gap-2">
+                    {visualizerLoading ? (
+                      <>
+                        <span className="animate-spin">⏳</span> Converting 2D→3D...
+                        <span className="text-xs bg-yellow-500 px-2 py-0.5 rounded-full text-black">
+                          Processing
+                        </span>
+                      </>
+                    ) : results?.volume_2d3d?.success ? (
+                      <>
+                        🧠 View 2D→3D Results
+                        <span className="text-xs bg-green-500 px-2 py-0.5 rounded-full text-white">
+                          ✓ Enhanced
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        🎯 Open 3D Viewer
+                        {results?.metadata?.has_dicom_data && (
+                          <span className="text-xs bg-yellow-500 px-2 py-0.5 rounded-full text-black">
+                            DICOM Ready
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </span>
                 </button>
               </div>
 
@@ -393,6 +543,7 @@ const Dashboard = () => {
                     <span className="age-value">
                       {(() => {
                         if (!results?.brainAge) return 'N/A';
+                        if (results.brainAge.status === 'skipped') return 'Skipped (No metadata)';
                         let predictedAge = results.brainAge.predicted_age || 
                                          results.brainAge.prediction || 
                                          results.brainAge.brain_age || 
@@ -428,6 +579,20 @@ const Dashboard = () => {
                 <h3>Normative Curve</h3>
                 <div className="chart-subtitle">Interactive Age vs Volume Analysis</div>
                 
+                {results?.normative?.status === 'skipped' ? (
+                  <div className="skipped-analysis-message">
+                    <div className="info-box">
+                      <p><strong>Normative Analysis Skipped</strong></p>
+                      <p>Normative modeling requires valid demographic metadata (age and gender). This analysis was skipped because metadata was not provided with the DICOM file.</p>
+                      <p>✓ 2D-3D conversion is still available below if DICOM file was processed.</p>
+                    </div>
+                  </div>
+                ) : getAvailableRegions().length === 0 ? (
+                  <div className="no-data-message">
+                    <p>No normative data available for visualization.</p>
+                  </div>
+                ) : (
+                  <>
                 {/* Region Selection */}
                 <div className="controls-section">
                   <div className="control-group">
@@ -592,10 +757,13 @@ const Dashboard = () => {
                     </ScatterChart>
                   </ResponsiveContainer>
                 </div>
+                </>
+                )}
               </div>
 
               {/* Clinical Interpretation */}
-              <div className="clinical-interpretation">
+              {results?.normative?.status !== 'skipped' && getAvailableRegions().length > 0 && (
+                <div className="clinical-interpretation">
                 <h3>Clinical Interpretation</h3>
                 <div className="interpretation-content">
                   {(() => {
@@ -650,7 +818,8 @@ const Dashboard = () => {
                     );
                   })()}
                 </div>
-              </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

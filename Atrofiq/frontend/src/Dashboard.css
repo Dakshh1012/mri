@@ -227,12 +227,39 @@
 
 .viewer-btn {
   width: 100%;
-  padding: 10px;
+  padding: 12px 16px;
   background: #e9ecef;
   color: #6c757d;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: not-allowed;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.viewer-btn.has-3d-data {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.viewer-btn.has-3d-data:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.viewer-status {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: bold;
 }
 
 .brain-age-analysis {

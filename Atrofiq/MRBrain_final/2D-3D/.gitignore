@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# Whitelist specific files
+!Train.py
+!Inference.py
+!SYSTEM_ARCHITECTURE_REPORT.md
+!README.md
+!.gitignore

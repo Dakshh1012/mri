@@ -1,0 +1,39 @@
+# Global Ignores (Data and Binary)
+*.nii
+*.nii.gz
+*.dcm
+*.jpg
+*.jpeg
+*.png
+*.csv
+*.xlsx
+*.xls
+*.pkl
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+
+# Runtime Directories
+results/
+uploads/
+session_output/
+WebApp/
+**/session_output/
+**/results/
+**/uploads/
+
+# Exceptions
+
+# Normative Modeling: Allow images and excel/csv
+!Normative Modeling/**/*.xlsx
+!Normative Modeling/**/*.xls
+!Normative Modeling/**/*.csv
+!Normative Modeling/**/*.png
+!Normative Modeling/**/*.jpg
+!Normative Modeling/**/*.jpeg
+!Normative Modeling/**/*.pdf
+
+# BrainAge-Prediction: Allow pickle models
+!BrainAge-Prediction/**/*.pkl
